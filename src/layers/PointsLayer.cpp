@@ -15,6 +15,9 @@ namespace tp_maps
 //##################################################################################################
 struct PointsLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::PointsLayer::Private");
+  TP_NONCOPYABLE(Private);
+
   PointsLayer* q;
 
   SpriteTexture* spriteTexture;
@@ -82,6 +85,14 @@ PointsLayer::~PointsLayer()
 }
 
 //##################################################################################################
+void PointsLayer::clearPoints()
+{
+  d->points.clear();
+  d->updateVertexBuffer = true;
+  update();
+}
+
+//##################################################################################################
 void PointsLayer::setPoints(const std::vector<PointSpriteShader::PointSprite>& points)
 {
   d->points = points;
@@ -101,10 +112,11 @@ void PointsLayer::render(RenderInfo& renderInfo)
   if(!d->spriteTexture->texture()->imageReady())
     return;
 
-  if(renderInfo.pass != NormalRenderPass && renderInfo.pass != PickingRenderPass)
+  if(renderInfo.pass != defaultRenderPass() &&
+     renderInfo.pass != RenderPass::Picking)
     return;
 
-  PointSpriteShader* shader = map()->getShader<PointSpriteShader>();
+  auto shader = map()->getShader<PointSpriteShader>();
   if(shader->error())
     return;
 
@@ -130,13 +142,13 @@ void PointsLayer::render(RenderInfo& renderInfo)
     d->updateVertexBuffer=false;
   }
 
-  shader->use(renderInfo.pass==PickingRenderPass?ShaderType::Picking:ShaderType::Render);
+  shader->use(renderInfo.shaderType());
   shader->setMatrix(map()->controller()->matrix(coordinateSystem()));
   shader->setScreenSize(map()->screenSize());
   shader->setTexture(d->textureID);
 
   map()->controller()->enableScissor(coordinateSystem());
-  if(renderInfo.pass==PickingRenderPass)
+  if(renderInfo.pass==RenderPass::Picking)
   {
     PickingDetails pickingDetails;
 
@@ -167,6 +179,7 @@ void PointsLayer::invalidateBuffers()
   d->updateVertexBuffer=true;
   d->textureID = 0;
   d->bindBeforeRender = true;
+  Layer::invalidateBuffers();
 }
 
 }

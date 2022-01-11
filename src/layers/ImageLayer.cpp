@@ -20,33 +20,38 @@ namespace tp_maps
 //##################################################################################################
 struct ImageLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::ImageLayer::Private");
+  TP_NONCOPYABLE(Private);
+
   ImageLayer* q;
 
   Texture* texture;
 
   //The raw data passed to this class
-  std::vector<GLushort> indexes{0,1,2,3};
+  std::vector<GLuint> indexes{0,1,2,3};
   std::vector<ImageShader::Vertex> verts;
   glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
 
-  glm::vec3 topRight;
-  glm::vec3 bottomRight;
-  glm::vec3 bottomLeft;
-  glm::vec3 topLeft;
-  bool externalCoords{false};
+  glm::vec3 topRight{};
+  glm::vec3 bottomRight{};
+  glm::vec3 bottomLeft{};
+  glm::vec3 topLeft{};
 
-  //Processed geometry ready for rendering
-  bool updateVertexBuffer{true};
   ImageShader::VertexBuffer* vertexBuffer{nullptr};
 
-  //Bound texture details
   GLuint textureID{0};
+
   bool bindBeforeRender{true};
+  bool externalCoords{false};
+  bool updateVertexBuffer{true};
+
+  std::function<ImageShader*(Map*)> getShader;
 
   //################################################################################################
   Private(ImageLayer* q_, Texture* texture_):
     q(q_),
-    texture(texture_)
+    texture(texture_),
+    getShader([](Map* map){return map->getShader<ImageShader>();})
   {
 
   }
@@ -96,7 +101,7 @@ void ImageLayer::setColor(const glm::vec4& color)
 }
 
 //##################################################################################################
-glm::vec4 ImageLayer::color()const
+glm::vec4 ImageLayer::color() const
 {
   return d->color;
 }
@@ -117,15 +122,28 @@ void ImageLayer::setImageCoords(const glm::vec3& topRight,
 }
 
 //##################################################################################################
+void ImageLayer::setShader(const std::function<ImageShader*(Map*)>& getShader)
+{
+  d->getShader = getShader;
+}
+
+//##################################################################################################
+void ImageLayer::bindTextureInNextRender()
+{
+  d->bindBeforeRender = true;
+}
+
+//##################################################################################################
 void ImageLayer::render(RenderInfo& renderInfo)
 {
   if(!d->texture->imageReady())
     return;
 
-  if(renderInfo.pass != NormalRenderPass && renderInfo.pass != PickingRenderPass)
+  if(renderInfo.pass != defaultRenderPass() &&
+     renderInfo.pass != RenderPass::Picking)
     return;
 
-  ImageShader* shader = map()->getShader<ImageShader>();
+  auto shader = d->getShader(map());
   if(shader->error())
     return;
 
@@ -178,19 +196,19 @@ void ImageLayer::render(RenderInfo& renderInfo)
   shader->setTexture(d->textureID);
 
   map()->controller()->enableScissor(coordinateSystem());
-  if(renderInfo.pass==PickingRenderPass)
+  if(renderInfo.pass==RenderPass::Picking)
   {
-    auto pickingID = renderInfo.pickingIDMat(PickingDetails(0, [](const PickingResult& r)
+    auto pickingID = renderInfo.pickingIDMat(PickingDetails(0, [&](const PickingResult& r)
     {
-      return new ImagePickingResult(r.pickingType, r.details, r.renderInfo, 0, 0);
+      return new ImagePickingResult(r.pickingType, r.details, r.renderInfo, this, 0, 0);
     }));
-    shader->drawImagePicking(GL_TRIANGLE_FAN,
+    shader->drawPicking(GL_TRIANGLE_FAN,
                              d->vertexBuffer,
                              pickingID);
   }
   else
   {
-    shader->drawImage(GL_TRIANGLE_FAN,
+    shader->draw(GL_TRIANGLE_FAN,
                       d->vertexBuffer,
                       d->color);
   }
@@ -204,6 +222,7 @@ void ImageLayer::invalidateBuffers()
   d->updateVertexBuffer=true;
   d->textureID = 0;
   d->bindBeforeRender = true;
+  Layer::invalidateBuffers();
 }
 
 }

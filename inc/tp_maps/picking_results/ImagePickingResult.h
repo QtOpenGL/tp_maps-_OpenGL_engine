@@ -7,15 +7,17 @@ namespace tp_maps
 {
 struct PickingDetails;
 class RenderInfo;
+class ImageLayer;
 
 //##################################################################################################
-class ImagePickingResult: public PickingResult
+class TP_MAPS_SHARED_EXPORT ImagePickingResult: public PickingResult
 {
 public:
   //################################################################################################
   ImagePickingResult(const tp_utils::StringID& pickingType_,
                      const PickingDetails& details_,
                      const RenderInfo& renderInfo_,
+                     ImageLayer* imageLayer_,
                      int imageX_,
                      int imageY_);
 

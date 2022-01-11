@@ -1,7 +1,7 @@
 #ifndef tp_maps_MaterialShader_h
 #define tp_maps_MaterialShader_h
 
-#include "tp_maps/Shader.h"
+#include "tp_maps/shaders/Geometry3DShader.h"
 
 #include "glm/glm.hpp"
 
@@ -9,119 +9,97 @@ namespace tp_maps
 {
 
 //##################################################################################################
-//! The base class for shaders.
-/*!
-This allows the map to cache shaders.
-*/
-class TP_MAPS_SHARED_EXPORT MaterialShader: public Shader
+//! A shader for drawing textured surfaces.
+class TP_MAPS_SHARED_EXPORT MaterialShader: public Geometry3DShader
 {
-  friend class Map;
 public:
   //################################################################################################
-  MaterialShader();
+  MaterialShader(Map* map, tp_maps::OpenGLProfile openGLProfile, bool compileShader=true);
 
   //################################################################################################
   ~MaterialShader() override;
+
+  //################################################################################################
+  void compile(const char* vertexShaderStr,
+               const char* fragmentShaderStr,
+               const std::function<void(GLuint)>& bindLocations,
+               const std::function<void(GLuint)>& getLocations,
+               ShaderType shaderType = ShaderType::Render);
+
+  //################################################################################################
+  //! Builds the normal render shader and calls modifyShaders to allow you to alter it.
+  void compileRenderShader(const std::function<void(std::string& vert, std::string& frag)>& modifyShaders,
+                           const std::function<void(GLuint)>& bindLocations,
+                           const std::function<void(GLuint)>& getLocations,
+                           ShaderType shaderType = ShaderType::Render);
 
   //################################################################################################
   //! Prepare OpenGL for rendering
   void use(ShaderType shaderType = ShaderType::Render) override;
 
   //################################################################################################
-  struct Material
-  {
-    glm::vec3 ambient{0.0f, 0.0f, 0.0f};
-    glm::vec3 diffuse{0.0f, 0.0f, 0.0f};
-    glm::vec3 specular{0.0f, 0.0f, 0.0f};
-    float shininess{0.0f};
-    float alpha{0.0f};
-  };
-
-  //################################################################################################
-  struct Light
-  {
-    glm::vec3 position{0.0f, 0.0f, 0.0f};
-    glm::vec3 ambient{0.4f, 0.4f, 0.4f};
-    glm::vec3 diffuse{0.8f, 0.8f, 0.8f};
-    glm::vec3 specular{1.0f, 1.0f, 1.0f};
-  };
-
-  //################################################################################################
   //! Call this to set the material before drawing the geometry
-  void setMaterial(const Material& material);
+  void setMaterial(const tp_math_utils::Material& material);
 
   //################################################################################################
-  //! Call this to set the light before drawing the geometry
-  void setLight(const Light& light);
+  //! Call this to set the lights before drawing the geometry
+  void setLights(const std::vector<tp_math_utils::Light>& lights, const std::vector<FBO>& lightBuffers);
 
   //################################################################################################
-  //! Call this to set the camera matrix before drawing the geometry
-  void setMatrix(const glm::mat4& matrix);
+  //! Call this to set the light offsets before drawing the geometry
+  void setLightOffsets(size_t renderedlightLevels);
 
   //################################################################################################
-  struct Vertex
-  {
-    glm::vec3 position;
-    glm::vec3 normal;
-
-    Vertex(){}
-    Vertex(const glm::vec3& position_,
-           const glm::vec3& normal_):
-      position(position_),
-      normal(normal_)
-    {
-
-    }
-  };
+  //! Call this to set the model, view, and projection matrices before drawing the geometry.
+  void setMatrix(const glm::mat4& m, const glm::mat4& v, const glm::mat4& p);
 
   //################################################################################################
-  struct VertexBuffer
-  {
-    //##############################################################################################
-    VertexBuffer(Map* map_, const Shader* shader_);
-
-    //##############################################################################################
-    ~VertexBuffer();
-
-    Map* map;
-    ShaderPointer shader;
-
-    //The Vertex Array Object
-    GLuint vaoID{0};
-
-    //The Index Buffer Object
-    GLuint iboID{0};
-
-    //The Vertex Buffer Object
-    GLuint vboID{0};
-
-    GLuint vertexCount{0};
-    GLsizei indexCount{0};
-  };
+  /*!
+  \param rgbaTextureID albedo and alpha texture.
+  \param normalsTextureID normals texture.
+  \param rmttrTextureID roughness, metalness, transmission, transmission roughness texture.
+  */
+  void setTextures(GLuint rgbaTextureID,
+                   GLuint normalsTextureID,
+                   GLuint rmttrTextureID);
 
   //################################################################################################
-  VertexBuffer* generateVertexBuffer(Map* map,
-                                     const std::vector<GLushort>& indexes,
-                                     const std::vector<Vertex>& verts)const;
+  void setBlankTextures();
+
+  //################################################################################################
+  //! Discard alpha values less than this
+  /*!
+  This can be used to discard alpha values on the normal render but draw them on the transparency
+  pass. Typically 0.99 would be used for render and 0.01 would be used for transparency passes.
+  \param discardOpacity A value between 1 and 0.
+  */
+  void setDiscardOpacity(float discardOpacity);
 
   //################################################################################################
   //! Call this to draw the image
   /*!
   \param vertices The points that make up the line.
   */
-  void draw(GLenum mode, VertexBuffer* vertexBuffer);
+  virtual void draw(GLenum mode, VertexBuffer* vertexBuffer);
 
   //################################################################################################
   //! Call this to draw the image for picking
   /*!
   \param vertices The points that make up the line.
   */
-  void drawPicking(GLenum mode,
-                   VertexBuffer* vertexBuffer,
-                   const glm::vec4& pickingID);
+  virtual void drawPicking(GLenum mode,
+                           VertexBuffer* vertexBuffer,
+                           const glm::vec4& pickingID);
 
   //################################################################################################
   static inline const tp_utils::StringID& name(){return materialShaderSID();}
+
+protected:  
+  //################################################################################################
+  void invalidate() override;
+
+  //################################################################################################
+  void drawVertexBuffer(GLenum mode, VertexBuffer* vertexBuffer);
 
 private:
   struct Private;

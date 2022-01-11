@@ -1,6 +1,8 @@
 #include "tp_maps/Controller.h"
 #include "tp_maps/Map.h"
 
+#include "glm/gtx/transform.hpp"
+
 #include <unordered_map>
 
 namespace tp_maps
@@ -9,10 +11,15 @@ namespace tp_maps
 //##################################################################################################
 struct Controller::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::Controller::Private");
+  TP_NONCOPYABLE(Private);
+
   Map* map;
-  std::unordered_map<tp_utils::StringID, glm::mat4> matrices;
+  std::unordered_map<tp_utils::StringID, Matrices> matrices;
   std::unordered_map<tp_utils::StringID, Scissor> scissor;
-  std::function<void(const MouseEvent&)> mouseClickCallback;
+
+  tp_math_utils::Light currentLight;
+  Matrices lightMatrices;
 
   //################################################################################################
   Private(Map* map_):
@@ -30,13 +37,68 @@ Controller::Controller(Map* map):
 }
 
 //##################################################################################################
-glm::mat4 Controller::matrix(const tp_utils::StringID& coordinateSystem)const
+glm::mat4 Controller::matrix(const tp_utils::StringID& coordinateSystem) const
 {
-  return tpGetMapValue(d->matrices, coordinateSystem, glm::mat4(1));
+  return tpGetMapValue(d->matrices, coordinateSystem).vp;
 }
 
 //##################################################################################################
-Controller::Scissor Controller::scissor(const tp_utils::StringID& coordinateSystem)const
+Matrices Controller::matrices(const tp_utils::StringID& coordinateSystem) const
+{
+  return tpGetMapValue(d->matrices, coordinateSystem);
+}
+
+//##################################################################################################
+void Controller::setCurrentLight(const tp_math_utils::Light& light, size_t level)
+{
+  d->currentLight = light;
+
+  float distance = light.orthoRadius;
+
+  //glm::mat4 view = glm::lookAt(d->currentLight.position, d->currentLight.position + d->currentLight.direction, glm::vec3(0.0f, 1.0f, 0.0f));
+  glm::mat4 view = d->currentLight.viewMatrix;
+
+  glm::mat4 projection;
+
+  switch(light.type)
+  {
+  case tp_math_utils::LightType::Global: [[fallthrough]];
+  case tp_math_utils::LightType::Directional:
+  {
+    projection = glm::ortho(-distance,  // <- Left
+                            distance,   // <- Right
+                            -distance,  // <- Bottom
+                            distance,   // <- Top
+                            light.near, // <- Near
+                            light.far); // <- Far
+    break;
+  }
+
+  case tp_math_utils::LightType::Spot:
+  {
+    projection = glm::perspective(glm::radians(light.fov), 1.0f, light.near, light.far);
+    break;
+  }
+  }
+
+  glm::mat4 offset = glm::translate(glm::mat4(1.0f), glm::vec3(tp_math_utils::Light::lightLevelOffsets()[level], 0.0f) * d->currentLight.offsetScale);
+
+  Matrices vp;
+  vp.p  = projection;
+  vp.v  = offset * view;
+  vp.vp = projection * offset * view;
+
+  d->lightMatrices = vp;
+}
+
+//##################################################################################################
+Matrices Controller::lightMatrices()
+{
+  return d->lightMatrices;
+}
+
+//##################################################################################################
+Controller::Scissor Controller::scissor(const tp_utils::StringID& coordinateSystem) const
 {
   return tpGetMapValue(d->scissor, coordinateSystem, Controller::Scissor());
 }
@@ -59,13 +121,19 @@ void Controller::disableScissor()
 }
 
 //##################################################################################################
-void Controller::setMouseClickCallback(const std::function<void(const MouseEvent&)>& mouseClickCallback)
+nlohmann::json Controller::saveState() const
 {
-  d->mouseClickCallback = mouseClickCallback;
+  return nlohmann::json();
 }
 
 //##################################################################################################
-Map* Controller::map()const
+void Controller::loadState(const nlohmann::json& j)
+{
+  TP_UNUSED(j);
+}
+
+//##################################################################################################
+Map* Controller::map() const
 {
   return d->map;
 }
@@ -77,9 +145,25 @@ Controller::~Controller()
 }
 
 //##################################################################################################
+void Controller::update(RenderFromStage renderFromStage)
+{
+  if(d->map)
+  {
+    d->map->controllerUpdate();
+    d->map->update(renderFromStage);
+  }
+}
+
+//##################################################################################################
 void Controller::setMatrix(const tp_utils::StringID& coordinateSystem, const glm::mat4& matrix)
 {
-  d->matrices[coordinateSystem] = matrix;
+  d->matrices[coordinateSystem].vp = matrix;
+}
+
+//##################################################################################################
+void Controller::setMatrices(const tp_utils::StringID& coordinateSystem, const Matrices& matrices)
+{
+  d->matrices[coordinateSystem] = matrices;
 }
 
 //##################################################################################################
@@ -94,16 +178,30 @@ void Controller::setScissor(const tp_utils::StringID& coordinateSystem, int x, i
 }
 
 //##################################################################################################
-void Controller::animate(double timestampMS)
+void Controller::mapResized(int w, int h)
 {
-  TP_UNUSED(timestampMS);
+  TP_UNUSED(w);
+  TP_UNUSED(h);
 }
 
 //##################################################################################################
-void Controller::callMouseClickCallback(const MouseEvent& event) const
+bool Controller::mouseEvent(const MouseEvent& event)
 {
-  if(d->mouseClickCallback)
-    d->mouseClickCallback(event);
+  TP_UNUSED(event);
+  return false;
+}
+
+//##################################################################################################
+bool Controller::keyEvent(const KeyEvent& event)
+{
+  TP_UNUSED(event);
+  return false;
+}
+
+//##################################################################################################
+void Controller::animate(double timestampMS)
+{
+  TP_UNUSED(timestampMS);
 }
 
 }

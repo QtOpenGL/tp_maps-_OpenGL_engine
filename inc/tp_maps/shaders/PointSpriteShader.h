@@ -4,6 +4,8 @@
 #include "tp_maps/Shader.h"
 #include "tp_maps/SpriteTexture.h"
 
+#include "tp_utils/RefCount.h"
+
 #include "glm/glm.hpp"
 
 namespace tp_maps
@@ -13,10 +15,9 @@ namespace tp_maps
 //! A shader for drawing point sprites.
 class TP_MAPS_SHARED_EXPORT PointSpriteShader: public Shader
 {
-  friend class Map;
 public:
   //################################################################################################
-  PointSpriteShader();
+  PointSpriteShader(Map* map, tp_maps::OpenGLProfile openGLProfile);
 
   //################################################################################################
   ~PointSpriteShader() override;
@@ -42,14 +43,14 @@ public:
     glm::vec4 color;
     glm::vec3 position;
     glm::vec3 offset{0.0f, 0.0f, 0.0f};
-    int spriteIndex{0};
+    size_t spriteIndex{0};
     float radius{1.0f};
 
     //##############################################################################################
     PointSprite() = default;
 
     //##############################################################################################
-    PointSprite(const glm::vec4& color_, const glm::vec3& position_, int spriteIndex_, float radius_):
+    PointSprite(const glm::vec4& color_, const glm::vec3& position_, size_t spriteIndex_, float radius_):
       color(color_),
       position(position_),
       spriteIndex(spriteIndex_),
@@ -62,20 +63,27 @@ public:
   //################################################################################################
   struct VertexBuffer
   {
+    TP_REF_COUNT_OBJECTS("PointSpriteShader::VertexBuffer");
+
     //##############################################################################################
     VertexBuffer(Map* map_, const Shader* shader_);
 
     //##############################################################################################
     ~VertexBuffer();
 
+    //##############################################################################################
+    void bindVBO() const;
+
     Map* map;
     ShaderPointer shader;
 
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     //The Vertex Array Object
     GLuint vaoID{0};
 
     //The Index Buffer Object
     GLuint iboID{0};
+#endif
 
     //The Vertex Buffer Object
     GLuint vboID{0};
@@ -87,10 +95,10 @@ public:
   //################################################################################################
   VertexBuffer* generateVertexBuffer(Map* map,
                                      const std::vector<PointSprite>& pointSptrites,
-                                     const std::vector<SpriteCoords>& coords)const;
+                                     const std::vector<SpriteCoords>& coords) const;
 
   //################################################################################################
-  void deleteVertexBuffer(VertexBuffer* vertexBuffer)const;
+  void deleteVertexBuffer(VertexBuffer* vertexBuffer) const;
 
   //################################################################################################
   //! Call this to draw the image

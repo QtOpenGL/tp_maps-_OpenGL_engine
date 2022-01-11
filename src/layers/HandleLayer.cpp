@@ -12,6 +12,7 @@
 #include "tp_utils/DebugUtils.h"
 
 #include "glm/gtc/type_ptr.hpp"
+#include "glm/gtx/norm.hpp"
 
 #include <vector>
 
@@ -37,13 +38,19 @@ glm::vec2 closestPointOnLine(const glm::vec2& a, const glm::vec2& b, const glm::
 //##################################################################################################
 struct HandleLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::HandleLayer::Private");
+  TP_NONCOPYABLE(Private);
+
   HandleLayer* q;
 
   SpriteTexture* spriteTexture;
 
+  tp_math_utils::Plane plane{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+
+  float zOffset{0.0f};
+
   //The raw data passed to this class
   std::vector<HandleDetails*> handles;
-  tp_math_utils::Plane plane{glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
 
   //Processed geometry ready for rendering
   bool updateVertexBuffer{true};
@@ -58,6 +65,7 @@ struct HandleLayer::Private
   std::function<void(void)> handleMovedCallback;
 
   bool doubleClickToAdd{true};
+  bool doubleClickToRemove{true};
 
   //################################################################################################
   Private(HandleLayer* q_, SpriteTexture* spriteTexture_):
@@ -120,7 +128,7 @@ HandleDetails::~HandleDetails()
 }
 
 //##################################################################################################
-HandleLayer* HandleDetails::layer()const
+HandleLayer* HandleDetails::layer() const
 {
   return m_layer;
 }
@@ -155,7 +163,19 @@ HandleLayer::~HandleLayer()
 }
 
 //##################################################################################################
-const std::vector<HandleDetails*>& HandleLayer::handles()const
+float HandleLayer::zOffset() const
+{
+  return d->zOffset;
+}
+
+//##################################################################################################
+void HandleLayer::setZOffset(float zOffset)
+{
+  d->zOffset = zOffset;
+}
+
+//##################################################################################################
+const std::vector<HandleDetails*>& HandleLayer::handles() const
 {
   return d->handles;
 }
@@ -165,18 +185,6 @@ void HandleLayer::clearHandles()
 {
   while(!d->handles.empty())
     delete d->handles.at(0);
-}
-
-//##################################################################################################
-const tp_math_utils::Plane& HandleLayer::plane()const
-{
-  return d->plane;
-}
-
-//##################################################################################################
-void HandleLayer::setPlane(const tp_math_utils::Plane& plane)
-{
-  d->plane = plane;
 }
 
 //##################################################################################################
@@ -191,7 +199,8 @@ void HandleLayer::render(RenderInfo& renderInfo)
   if(!d->spriteTexture->texture()->imageReady())
     return;
 
-  if(renderInfo.pass != NormalRenderPass && renderInfo.pass != PickingRenderPass)
+  if(renderInfo.pass != defaultRenderPass() &&
+     renderInfo.pass != RenderPass::Picking)
     return;
 
   auto shader = map()->getShader<PointSpriteShader>();
@@ -217,6 +226,7 @@ void HandleLayer::render(RenderInfo& renderInfo)
     }
 
     std::vector<PointSpriteShader::PointSprite> pointSprites;
+    pointSprites.reserve(d->handles.size());
     {
       HandleDetails** h = d->handles.data();
       HandleDetails** hMax = h + d->handles.size();
@@ -228,6 +238,7 @@ void HandleLayer::render(RenderInfo& renderInfo)
         ps.position    = hh->position;
         ps.spriteIndex = 0;
         ps.radius      = hh->radius;
+        ps.offset.z    = d->zOffset;
         pointSprites.push_back(ps);
       }
     }
@@ -236,13 +247,16 @@ void HandleLayer::render(RenderInfo& renderInfo)
     d->updateVertexBuffer=false;
   }
 
-  shader->use();
-  shader->setMatrix(map()->controller()->matrix(coordinateSystem()));
+  shader->use(renderInfo.shaderType());
+
+  glm::mat4 m = map()->controller()->matrix(coordinateSystem()) * modelToWorldMatrix();
+
+  shader->setMatrix(m);
   shader->setScreenSize(map()->screenSize());
   shader->setTexture(d->textureID);
 
   map()->controller()->enableScissor(coordinateSystem());
-  if(renderInfo.pass==PickingRenderPass)
+  if(renderInfo.pass==RenderPass::Picking)
   {
     auto pickingID = renderInfo.pickingID(PickingDetails(0, [this](const PickingResult& r) -> PickingResult*
     {
@@ -252,7 +266,7 @@ void HandleLayer::render(RenderInfo& renderInfo)
         return new HandlePickingResult(r.pickingType, r.details, r.renderInfo, handle);
       }
       return nullptr;
-    }));
+    }, uint32_t(d->handles.size())));
     shader->drawPointSpritesPicking(d->vertexBuffer, pickingID);
   }
   else
@@ -269,12 +283,13 @@ void HandleLayer::invalidateBuffers()
   d->updateVertexBuffer=true;
   d->textureID = 0;
   d->bindBeforeRender = true;
+  Layer::invalidateBuffers();
 }
 
 //##################################################################################################
 bool HandleLayer::mouseEvent(const MouseEvent& event)
 {
-  glm::mat4x4 cameraMatrix = map()->controller()->matrix(coordinateSystem());
+  glm::mat4 m = map()->controller()->matrix(coordinateSystem()) * modelToWorldMatrix();
 
   switch(event.type)
   {
@@ -283,8 +298,26 @@ bool HandleLayer::mouseEvent(const MouseEvent& event)
     if(event.button != Button::LeftButton)
       return false;
 
-    float width   = map()->width();
-    float height  = map()->height();
+    PickingResult* result = map()->performPicking(gizmoLayerSID(), event.pos);
+    TP_CLEANUP([&]{delete result;});
+
+    auto pickingResult = dynamic_cast<HandlePickingResult*>(result);
+
+    if(pickingResult && pickingResult->layer == this)
+    {
+      for(size_t i=0; i<d->handles.size(); i++)
+      {
+        if(d->handles.at(i) == pickingResult->handle)
+        {
+          d->currentHandle = int(i);
+          return true;
+        }
+      }
+    }
+
+#if 0 //If not picking ....
+    float width   = float(map()->width());
+    float height  = float(map()->height());
     float xOffset = width  / 2.0f;
     float yOffset = height / 2.0f;
 
@@ -293,12 +326,12 @@ bool HandleLayer::mouseEvent(const MouseEvent& event)
     {
       const glm::vec3& position = d->handles.at(h)->position;
 
-      glm::vec4 screenCoord = cameraMatrix * glm::vec4(position, 1.0f);
+      glm::vec4 screenCoord = m * glm::vec4(position, 1.0f);
       screenCoord.x = screenCoord.x * xOffset + xOffset;
       screenCoord.y = height - (screenCoord.y * yOffset + yOffset);
 
-      int xDiff{int(std::abs(screenCoord.x - event.pos.x))};
-      int yDiff{int(std::abs(screenCoord.y - event.pos.y))};
+      int xDiff{int(std::abs(screenCoord.x - float(event.pos.x)))};
+      int yDiff{int(std::abs(screenCoord.y - float(event.pos.y)))};
 
       int manhattanLength = xDiff + yDiff;
 
@@ -308,6 +341,8 @@ bool HandleLayer::mouseEvent(const MouseEvent& event)
         return true;
       }
     }
+#endif
+
     break;
   }
 
@@ -316,7 +351,7 @@ bool HandleLayer::mouseEvent(const MouseEvent& event)
     if(d->currentHandle>=0 && d->currentHandle<int(d->handles.size()))
     {
       glm::vec3 newPosition;
-      if(map()->unProject(event.pos, newPosition, d->plane, cameraMatrix))
+      if(map()->unProject(event.pos, newPosition, d->plane, m))
       {
         moveHandle(d->handles[size_t(d->currentHandle)], newPosition);
         return true;
@@ -342,54 +377,85 @@ bool HandleLayer::mouseEvent(const MouseEvent& event)
 
   case MouseEventType::DoubleClick: //--------------------------------------------------------------
   {
-    if(!d->doubleClickToAdd)
-      break;
-
-    if(d->handles.size()<2)
-      break;
-
-    glm::vec3 p3;
-    if(!map()->unProject(event.pos, p3, d->plane, cameraMatrix))
-      break;
-
-    glm::vec2 p(p3.x, p3.y);
-
-    float dist=1000000.0f;
-    int index=-1;
-    glm::vec2 closest;
-    auto calc = [p, &dist, &index, &closest](const glm::vec3& a3, const glm::vec3& b3, int j)
+    if(event.button == Button::LeftButton)
     {
-      glm::vec2 a(a3.x, a3.y);
-      glm::vec2 b(b3.x, b3.y);
+      if(!d->doubleClickToAdd)
+        break;
 
-      glm::vec2 c = closestPointOnLine(a, b, p);
-      glm::vec2 v = p-c;
-      float distSq = v.x*v.x + v.y*v.y;
+      if(d->handles.size()<2)
+        break;
 
-      if(distSq<dist)
+      glm::vec3 p3;
+      if(!map()->unProject(event.pos, p3, d->plane, m))
+        break;
+
+      glm::vec2 p(p3.x, p3.y);
+
+      float dist=1000000.0f;
+      int index=-1;
+      glm::vec2 closest;
+      auto calc = [&](const glm::vec3& a3, const glm::vec3& b3, int j)
       {
-        dist = distSq;
-        index = j;
-        closest = c;
+        glm::vec2 a(a3.x, a3.y);
+        glm::vec2 b(b3.x, b3.y);
+
+        glm::vec2 c = closestPointOnLine(a, b, p);
+        glm::vec2 v = p-c;
+        float distSq = v.x*v.x + v.y*v.y;
+
+        if(distSq<dist)
+        {
+          glm::vec2 cScreen;
+          map()->project(glm::vec3(c, 0.0f), cScreen, m);
+          constexpr float maxDistance2 = (6.0f*6.0f);
+          if(glm::distance2(glm::vec2(event.pos), cScreen) < maxDistance2)
+          {
+            dist = distSq;
+            index = j;
+            closest = c;
+          }
+        }
+      };
+
+      for(int i=1; i<int(d->handles.size()); i++)
+        calc(d->handles.at(size_t(i-1))->position, d->handles.at(size_t(i))->position, i);
+
+      calc(d->handles.at(d->handles.size()-1)->position, d->handles.at(0)->position, int(d->handles.size()));
+
+      if(index>=0)
+      {
+        HandleDetails* style = d->handles.at(0);
+        HandleDetails* handle = new HandleDetails(this,
+                                                  glm::vec3(p.x, p.y, 0.0f),
+                                                  style->color,
+                                                  style->sprite,
+                                                  style->radius,
+                                                  index);
+        moveHandle(handle, handle->position);
+
+        return true;
       }
-    };
-
-    for(int i=1; i<int(d->handles.size()); i++)
-      calc(d->handles.at(i-1)->position, d->handles.at(size_t(i))->position, i);
-
-    calc(d->handles.at(d->handles.size()-1)->position, d->handles.at(0)->position, d->handles.size());
-
-    if(index>=0)
-    {
-      HandleDetails* style = d->handles.at(0);
-      HandleDetails* handle = new HandleDetails(this,
-                                                glm::vec3(p.x, p.y, 0.0f),
-                                                style->color,
-                                                style->sprite,
-                                                style->radius,
-                                                index);
-      moveHandle(handle, handle->position);
     }
+
+    else if(event.button == Button::RightButton)
+    {
+      if(!d->doubleClickToRemove)
+        break;
+
+      PickingResult* result = map()->performPicking(gizmoLayerSID(), event.pos);
+      TP_CLEANUP([&]{delete result;});
+
+      auto pickingResult = dynamic_cast<HandlePickingResult*>(result);
+
+      if(pickingResult && pickingResult->layer == this && d->handles.size()>3)
+      {
+        delete pickingResult->handle;
+
+        if(d->handleMovedCallback)
+          d->handleMovedCallback();
+      }
+    }
+
     break;
   }
 

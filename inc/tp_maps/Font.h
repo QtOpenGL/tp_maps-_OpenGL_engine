@@ -3,22 +3,29 @@
 
 #include "tp_maps/Globals.h"
 
-#include "glm/glm.hpp"
-
 #include <unordered_set>
+#include <array>
+
+union TPPixel;
 
 namespace tp_maps
 {
 class PreparedString;
-struct Pixel;
 
 //##################################################################################################
 //! Details of a single character as produced by the Font.
-struct Glyph
+struct TP_MAPS_SHARED_EXPORT Glyph
 {
   int w{0};
   int h{0};
-  Pixel* data{nullptr};
+  TPPixel* data{nullptr};
+
+  // Coordinate sysatem
+  // 1
+  // ^
+  // |
+  // |
+  // 0----> 1
 
   float leftBearing  {0.0f}; //Negative for values to the left of 0
   float rightBearing {0.0f}; //Positive to the right of kerningWidth
@@ -30,10 +37,17 @@ struct Glyph
 
 //##################################################################################################
 //! Details of a character in a string.
-struct GlyphGeometry
+struct TP_MAPS_SHARED_EXPORT GlyphGeometry
 {
-  glm::vec2 textureCoords[4];
-  glm::vec2 vertices[4];
+  // Coordinate sysatem
+  // 1
+  // ^
+  // |
+  // |
+  // 0----> 1
+
+  std::array<glm::vec2, 4> textureCoords; // (Bottom left, Bottom right, Top right, Top left)
+  std::array<glm::vec2, 4> vertices;      // (Bottom left, Bottom right, Top right, Top left)
 
   float leftBearing{0.0f}; //Negative for values to the left of 0
   float rightBearing{0.0f};
@@ -45,14 +59,26 @@ struct GlyphGeometry
 
 //##################################################################################################
 //! Geometry details of a string of characters.
-struct FontGeometry
+struct TP_MAPS_SHARED_EXPORT FontGeometry
 {
-  float leftBearing{0.0f}; //Negative for values to the left of 0
-  float rightBearing{0.0f};
-  float topBearing{0.0f};
+  // Coordinate sysatem
+  // 1
+  // ^
+  // |
+  // |
+  // 0----> 1
 
-  float totalWidth{0.0f};
-  float totalHeight{0.0f};
+  float leftBearing  {0.0f}; //Negative for values to the left of 0
+  float rightBearing {0.0f}; //Negative for values to the left of 0
+  float topBearing   {0.0f}; //Positive above 0
+
+  float totalWidth  {0.0f};
+  float totalHeight {0.0f};
+
+  float top    {0.0f};
+  float bottom {0.0f};
+  float left   {0.0f};
+  float right  {0.0f};
 
   std::vector<GlyphGeometry> glyphs;
 };
@@ -66,6 +92,7 @@ take these glyphs a
 class TP_MAPS_SHARED_EXPORT Font
 {
   friend class PreparedString;
+  TP_NONCOPYABLE(Font);
 public:
   //################################################################################################
   Font();

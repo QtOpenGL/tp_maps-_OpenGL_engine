@@ -9,16 +9,12 @@ namespace tp_maps
 {
 
 //##################################################################################################
-//! The base class for shaders.
-/*!
-This allows the map to cache shaders.
-*/
+//! A shader for drawing lines.
 class TP_MAPS_SHARED_EXPORT LineShader: public Shader
 {
-  friend class Map;
 public:
   //################################################################################################
-  LineShader();
+  LineShader(Map* map, tp_maps::OpenGLProfile openGLProfile);
 
   //################################################################################################
   ~LineShader() override;
@@ -40,20 +36,27 @@ public:
   //################################################################################################
   struct VertexBuffer
   {
+    TP_REF_COUNT_OBJECTS("LineShader::VertexBuffer");
+
     //##############################################################################################
     VertexBuffer(Map* map_, const Shader* shader_);
 
     //##############################################################################################
     ~VertexBuffer();
 
+    //##############################################################################################
+    void bindVBO() const;
+
     Map* map;    
     ShaderPointer shader;
 
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     //The Vertex Array Object
     GLuint vaoID{0};
 
     //The Index Buffer Object
     GLuint iboID{0};
+#endif
 
     //The Vertex Buffer Object
     GLuint vboID{0};
@@ -63,7 +66,7 @@ public:
   };
 
   //################################################################################################
-  VertexBuffer* generateVertexBuffer(Map* map, const std::vector<glm::vec3>& vertices)const;
+  VertexBuffer* generateVertexBuffer(Map* map, const std::vector<glm::vec3>& vertices) const;
 
   //################################################################################################
   //! Call this to draw the lines

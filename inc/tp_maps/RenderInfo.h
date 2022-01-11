@@ -5,8 +5,6 @@
 
 #include "tp_utils/StringID.h"
 
-#include "glm/glm.hpp"
-
 #include <functional>
 #include <vector>
 
@@ -29,7 +27,7 @@ event. There are subclasses of PickingResult for different types of layer.
 typedef std::function<PickingResult*(const PickingResult& result)> PickingCallback;
 
 //##################################################################################################
-struct PickingDetails
+struct TP_MAPS_SHARED_EXPORT PickingDetails
 {
   //! Should be >=0 and <count
   size_t index;
@@ -40,20 +38,13 @@ struct PickingDetails
   //! The number of picking ID to reserve
   uint32_t count;
 
-  PickingDetails(size_t index_=0, PickingCallback callback_=PickingCallback(), uint32_t count_=1):
+  PickingDetails(size_t index_=0, const PickingCallback& callback_=PickingCallback(), uint32_t count_=1):
     index(index_),
     callback(callback_),
     count(count_)
   {
 
   }
-};
-
-//##################################################################################################
-enum RenderPass
-{
-  NormalRenderPass,
-  PickingRenderPass
 };
 
 //##################################################################################################
@@ -64,11 +55,14 @@ public:
   //! The map that the render is happening in
   Map* map;
 
-  //! The layer that the render is happening in
-  Layer* layer;
-
   //! The render method will get called multiple times for different purposes
   RenderPass pass;
+
+  //! Are we rendering to HDR buffers.
+  HDR hdr{HDR::No};
+
+  //! Do we have extra buffers for normals and specular.
+  ExtendedFBO extendedFBO{ExtendedFBO::No};
 
   //! If this is a picking pass this will contain the type of picking request
   /*!
@@ -97,6 +91,9 @@ public:
   //################################################################################################
   //! Call this at the start of the picking pass
   void resetPicking();
+
+  //################################################################################################
+  ShaderType shaderType() const;
 };
 
 }

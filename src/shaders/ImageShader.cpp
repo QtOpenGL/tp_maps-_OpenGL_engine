@@ -10,70 +10,48 @@ namespace tp_maps
 
 namespace
 {
-
-const char* vertexShaderStr =
-    TP_VERT_SHADER_HEADER
-    "//ImageShader vertexShaderStr\n"
-    TP_GLSL_IN_V"vec3 inVertex;\n"
-    TP_GLSL_IN_V"vec3 inNormal;\n"
-    TP_GLSL_IN_V"vec2 inTexture;\n"
-    "uniform mat4 matrix;\n"
-    TP_GLSL_OUT_V"vec3 LightVector0;\n"
-    TP_GLSL_OUT_V"vec3 EyeNormal;\n"
-    TP_GLSL_OUT_V"vec2 texCoordinate;\n"
-    "void main()\n"
-    "{\n"
-    "  gl_Position = matrix * vec4(inVertex, 1.0);\n"
-    "  LightVector0 = vec3(1.0, 1.0, 1.0);\n"
-    "  EyeNormal = inNormal;\n"
-    "  texCoordinate = inTexture;\n"
-    "}\n";
-
-const char* fragmentShaderStr =
-    TP_FRAG_SHADER_HEADER
-    "//ImageShader fragmentShaderStr\n"
-    TP_GLSL_IN_F"vec3 LightVector0;\n"
-    TP_GLSL_IN_F"vec3 EyeNormal;\n"
-    TP_GLSL_IN_F"vec2 texCoordinate;\n"
-    "uniform sampler2D textureSampler;\n"
-    "uniform vec4 color;\n"
-    TP_GLSL_GLFRAGCOLOR_DEF
-    "void main()\n"
-    "{\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = " TP_GLSL_TEXTURE "(textureSampler, texCoordinate)*color;\n"
-    "  if(" TP_GLSL_GLFRAGCOLOR ".a < 0.01)\n"
-    "    discard;\n"
-    "}\n";
+ShaderResource& vertShaderStr(){static ShaderResource s{"/tp_maps/ImageShader.vert"}; return s;}
+ShaderResource& fragShaderStr(){static ShaderResource s{"/tp_maps/ImageShader.frag"}; return s;}
+ShaderResource& frag3DShaderStr(){static ShaderResource s{"/tp_maps/DepthImage3DShader.frag"}; return s;}
 }
 
 //##################################################################################################
 struct ImageShader::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::ImageShader::Private");
+  TP_NONCOPYABLE(Private);
+  Private() = default;
+
   GLint matrixLocation{0};
   GLint colorLocation{0};
 
   //################################################################################################
   void draw(GLenum mode, ImageShader::VertexBuffer* vertexBuffer)
   {
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     tpBindVertexArray(vertexBuffer->vaoID);
     tpDrawElements(mode,
-                        vertexBuffer->indexCount,
-                        GL_UNSIGNED_SHORT,
-                        nullptr);
+                   vertexBuffer->indexCount,
+                   GL_UNSIGNED_INT,
+                   nullptr);
     tpBindVertexArray(0);
+#else
+    vertexBuffer->bindVBO();
+    glDrawArrays(mode, 0, vertexBuffer->indexCount);
+#endif
   }
 };
 
 //##################################################################################################
-ImageShader::ImageShader(const char* vertexShader, const char* fragmentShader):
-  Shader(),
+ImageShader::ImageShader(Map* map, tp_maps::OpenGLProfile openGLProfile, const char* vertexShader, const char* fragmentShader):
+  Geometry3DShader(map, openGLProfile),
   d(new Private())
 {
   if(!vertexShader)
-    vertexShader = vertexShaderStr;
+    vertexShader = vertShaderStr().data(openGLProfile, ShaderType::Render);
 
   if(!fragmentShader)
-    fragmentShader = fragmentShaderStr;
+    fragmentShader = fragShaderStr().data(openGLProfile, ShaderType::Render);
 
   compile(vertexShader,
           fragmentShader,
@@ -123,80 +101,36 @@ void ImageShader::setTexture(GLuint textureID)
 }
 
 //##################################################################################################
-ImageShader::VertexBuffer* ImageShader::generateVertexBuffer(Map* map,
-                                                             const std::vector<GLushort>& indexes,
-                                                             const std::vector<ImageShader::Vertex>& verts)const
+void ImageShader::setTexture3D(GLuint textureID, size_t level)
 {
-  VertexBuffer* vertexBuffer = new VertexBuffer(map, this);
-
-  vertexBuffer->vertexCount = GLuint(verts.size());
-  vertexBuffer->indexCount = GLsizei(indexes.size());
-
-  glGenBuffers(1, &vertexBuffer->iboID);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(indexes.size()*sizeof(GLushort)), indexes.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-
-  glGenBuffers(1, &vertexBuffer->vboID);
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts.size()*sizeof(ImageShader::Vertex)), verts.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-  tpGenVertexArrays(1, &vertexBuffer->vaoID);
-  tpBindVertexArray(vertexBuffer->vaoID);
-
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ImageShader::Vertex), reinterpret_cast<void*>(0));
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ImageShader::Vertex), reinterpret_cast<void*>(sizeof(float)*3));
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(ImageShader::Vertex), reinterpret_cast<void*>(sizeof(float)*6));
-  glEnableVertexAttribArray(0);
-  glEnableVertexAttribArray(1);
-  glEnableVertexAttribArray(2);
-  glDisableVertexAttribArray(3);
-
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
-
-  tpBindVertexArray(0);
-
-  return vertexBuffer;
+  TP_UNUSED(level);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_3D, textureID);
 }
 
 //##################################################################################################
-ImageShader::VertexBuffer::VertexBuffer(Map* map_, const Shader *shader_):
-  map(map_),
-  shader(shader_)
-{
-
-}
-//##################################################################################################
-ImageShader::VertexBuffer::~VertexBuffer()
-{
-  if(!vaoID)
-    return;
-
-  map->makeCurrent();
-  tpDeleteVertexArrays(1, &vaoID);
-  glDeleteBuffers(1, &iboID);
-  glDeleteBuffers(1, &vboID);
-}
-
-//##################################################################################################
-void ImageShader::drawImage(GLenum mode,
+void ImageShader::draw(GLenum mode,
                             VertexBuffer* vertexBuffer,
                             const glm::vec4& color)
 {
-  glUniform4fv(d->colorLocation, 1, reinterpret_cast<const GLfloat*>(&color));
+  glUniform4fv(d->colorLocation, 1, &color.x);
   d->draw(mode, vertexBuffer);
 }
 
 //##################################################################################################
-void ImageShader::drawImagePicking(GLenum mode,
+void ImageShader::drawPicking(GLenum mode,
                                    VertexBuffer* vertexBuffer,
                                    const glm::vec4& pickingID)
 {
   TP_UNUSED(pickingID);
   glDisable(GL_BLEND);
   d->draw(mode, vertexBuffer);
+}
+//##################################################################################################
+Image3DShader::Image3DShader(Map* map, tp_maps::OpenGLProfile openGLProfile):
+  ImageShader(map, openGLProfile, nullptr, frag3DShaderStr().data(openGLProfile, ShaderType::Render))
+{
+
 }
 
 }

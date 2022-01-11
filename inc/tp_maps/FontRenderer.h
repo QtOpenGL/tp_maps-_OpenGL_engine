@@ -4,6 +4,12 @@
 #include "tp_maps/Globals.h"
 
 #include <unordered_set>
+#include <memory>
+
+namespace tp_image_utils
+{
+class ColorMap;
+}
 
 namespace tp_maps
 {
@@ -12,15 +18,15 @@ class Font;
 class PreparedString;
 struct FontGeometry;
 struct Glyph;
-struct TextureData;
 
 //##################################################################################################
 class TP_MAPS_SHARED_EXPORT FontRenderer
 {
   friend class PreparedString;
+  TP_NONCOPYABLE(FontRenderer);
 public:
   //################################################################################################
-  FontRenderer(Map* map, Font* font);
+  FontRenderer(Map* map, const std::shared_ptr<Font>& font);
 
   //################################################################################################
   virtual ~FontRenderer();
@@ -29,7 +35,7 @@ public:
   Map* map() const;
 
   //################################################################################################
-  Font* font() const;
+  std::shared_ptr<Font> font() const;
 
   //################################################################################################
   //! Force a regeneration of the texture using only the required characters.
@@ -58,7 +64,7 @@ protected:
 
   //################################################################################################
   //! Reimplement this if you want to modify the texture.
-  virtual void setTexture(const TextureData& texture);
+  virtual void setTexture(const tp_image_utils::ColorMap& texture);
 
   //################################################################################################
   const std::vector<PreparedString*>& preparedStrings() const;

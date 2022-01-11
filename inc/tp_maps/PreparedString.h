@@ -3,8 +3,6 @@
 
 #include "tp_maps/Globals.h"
 
-#include "glm/glm.hpp"
-
 #include <string>
 
 namespace tp_maps
@@ -13,7 +11,7 @@ class FontRenderer;
 struct FontGeometry;
 
 //##################################################################################################
-struct PreparedStringConfig
+struct TP_MAPS_SHARED_EXPORT PreparedStringConfig
 {
   bool topDown{false};
 
@@ -53,6 +51,11 @@ public:
   const FontGeometry& fontGeometry() const;
 
   //################################################################################################
+  const PreparedStringConfig& config() const;
+
+protected:
+
+  //################################################################################################
   //! Called when buffers become invalid.
   /*!
   This is called when the OpenGL context becomes invalid, all OpenGL resources should be ignored.
@@ -67,13 +70,11 @@ public:
   */
   virtual void regenerateBuffers();
 
-  //################################################################################################
-  const PreparedStringConfig& config() const;
-
 private:
   struct Private;
   Private* d;
   friend struct Private;
+  friend class FontRenderer;
 };
 
 }

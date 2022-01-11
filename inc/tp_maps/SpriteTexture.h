@@ -3,9 +3,10 @@
 
 #include "tp_maps/Globals.h"
 
-#include "glm/glm.hpp"
+#include "tp_utils/RefCount.h"
 
 #include <vector>
+#include <array>
 #include <functional>
 
 namespace tp_maps
@@ -13,9 +14,9 @@ namespace tp_maps
 class Texture;
 
 //##################################################################################################
-struct SpriteCoords
+struct TP_MAPS_SHARED_EXPORT SpriteCoords
 {
-  glm::vec2 coords[4];
+  std::array<glm::vec2, 4> coords;
 
   static std::vector<SpriteCoords> oneOne(float w=1.0f, float h=1.0f)
   {
@@ -31,22 +32,30 @@ struct SpriteCoords
 //##################################################################################################
 class SpriteTexture
 {
+  TP_NONCOPYABLE(SpriteTexture);
+  TP_REF_COUNT_OBJECTS("SpriteTexture");
 public:
+  //################################################################################################
+  SpriteTexture()=default;
+
   //################################################################################################
   ~SpriteTexture();
 
   //################################################################################################
   //! Returns the texture that belongs to this sprite set
-  Texture* texture()const;
+  Texture* texture() const;
 
   //################################################################################################
-  const std::vector<SpriteCoords>& coords()const;
+  const std::vector<SpriteCoords>& coords() const;
 
   //################################################################################################
   void setCoordsChangedCallback(std::function<void()> callback);
 
   //################################################################################################
   //! This should be called once before use
+  /*!
+  \param texture The texture object, SpriteTexture will take ownership of texture.
+  */
   void setTexture(Texture* texture);
 
   //################################################################################################

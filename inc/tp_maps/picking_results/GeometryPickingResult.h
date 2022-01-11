@@ -9,16 +9,17 @@ struct PickingDetails;
 class RenderInfo;
 
 //##################################################################################################
-class GeometryPickingResult: public PickingResult
+class TP_MAPS_SHARED_EXPORT GeometryPickingResult: public PickingResult
 {
 public:
   //################################################################################################
   GeometryPickingResult(const tp_utils::StringID& pickingType_,
                         const PickingDetails& details_,
-                        const RenderInfo& renderInfo_);
+                        const RenderInfo& renderInfo_,
+                        Layer* layer_);
 
   //################################################################################################
-  ~GeometryPickingResult()override;
+  ~GeometryPickingResult() override;
 
   const int geometryIndex;
 };

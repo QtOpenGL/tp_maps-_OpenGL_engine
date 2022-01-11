@@ -1,7 +1,10 @@
-#include "tp_maps/shaders/MaterialShader.h"
+﻿#include "tp_maps/shaders/MaterialShader.h"
 #include "tp_maps/Map.h"
 
+#include "tp_math_utils/Globals.h"
+
 #include "tp_utils/DebugUtils.h"
+#include "tp_utils/TimeUtils.h"
 
 #include "glm/gtc/type_ptr.hpp"
 
@@ -11,146 +14,188 @@ namespace tp_maps
 namespace
 {
 
-const char* vertexShaderStr =
-    TP_VERT_SHADER_HEADER
-    "//MaterialShader vertexShaderStr\n"
-    TP_GLSL_IN_V"vec3 inVertex;\n"
-    TP_GLSL_IN_V"vec3 inNormal;\n"
-    TP_GLSL_OUT_V"vec3 LightVector0;\n"
-    TP_GLSL_OUT_V"vec3 EyeNormal;\n"
-    TP_GLSL_OUT_V"vec2 texCoordinate;\n"
-    TP_GLSL_OUT_V"vec3 normal;\n"
-    TP_GLSL_OUT_V"vec3 fragPos;\n"
-                 "uniform mat4 matrix;\n"
-                 "void main()\n"
-                 "{\n"
-                 "  gl_Position = matrix * vec4(inVertex, 1.0);\n"
-                 "  fragPos = inVertex;\n"
-                 "  LightVector0 = vec3(1.0, 1.0, 1.0);\n"
-                 "  normal = inNormal;\n"
-                 "}\n";
+/*
+https://google.github.io/filament/Filament.html#materialsystem/clearcoatmodel
 
-const char* fragmentShaderStr =
-    TP_FRAG_SHADER_HEADER
-    "//MaterialShader fragmentShaderStr\n"
-    "\n"
-    "struct Material\n"
-    "{\n"
-    "  vec3 ambient;\n"
-    "  vec3 diffuse;\n"
-    "  vec3 specular;\n"
-    "  float shininess;\n"
-    "  float alpha;\n"
-    "};\n"
-    "\n"
-    "struct Light\n"
-    "{\n"
-    "  vec3 position;\n"
-    "  vec3 ambient;\n"
-    "  vec3 diffuse;\n"
-    "  vec3 specular;\n"
-    "};\n"
-    "\n"
-    "varying vec3 fragPos;\n"
-    "varying vec3 normal;\n"
-    "\n"
-    "uniform vec3 viewPos;\n"
-    "uniform Material material;\n"
-    "uniform Light light;\n"
-    "uniform float picking;\n"
-    "uniform vec4 pickingID;\n"
-    "\n"
-    "varying vec3 LightVector0;\n"
-    "varying vec3 EyeNormal;\n"
-    TP_GLSL_GLFRAGCOLOR_DEF
-    "\n"
-    "void main()\n"
-    "{\n"
-    "  // Ambient\n"
-    "  vec3 ambient = light.ambient * material.ambient;\n"
-    "  \n"
-    "  // Diffuse\n"
-    "  vec3 norm = normalize(normal);\n"
-    "  vec3 lightDir = normalize(light.position - fragPos);\n"
-    "  float diff = max(dot(norm, lightDir), 0.0);\n"
-    "  vec3 diffuse = light.diffuse * (diff * material.diffuse);\n"
-    "  \n"
-    "  // Specular\n"
-    "  vec3 viewDir = normalize(viewPos - fragPos);\n"
-    "  vec3 reflectDir = reflect(-lightDir, norm);\n"
-    "  float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);\n"
-    "  vec3 specular = light.specular * (spec * material.specular);\n"
-    "  \n"
-    "  vec3 result = ambient + diffuse + specular;\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = vec4(result, material.alpha);\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = (picking*pickingID) + ((1.0-picking)*" TP_GLSL_GLFRAGCOLOR ");"
-    "}\n";
+https://learnopengl.com/PBR/Theory
+
+https://youtu.be/yn5UJzMqxj0
+https://github.com/BennyQBD/3DEngineCpp/blob/master/res/shaders/sampling.glh
+
+https://dominium.maksw.com/articles/physically-based-rendering-pbr/pbr-part-one/
+https://www.chaosgroup.com/blog/understanding-metalness
+
+GLSL Function Documantation
+---------------------------
+*/
+
+//##################################################################################################
+// Calculates GGX distribution.
+/*
+This creates the bright spot and soft edge of a specular highlight. I could not figure out what GGX
+stands for it just seems to be a name.
+
+The following are good references:
+* http://www.neilblevins.com/cg_education/ggx/ggx.htm
+* https://learnopengl.com/PBR/Theory
+* https://dominium.maksw.com/articles/physically-based-rendering-pbr/pbr-part-one/
+
+float calcGGXDist(vec3 norm, vec3 lightDirection_tangent, float roughness2);
+*/
+
+ShaderResource& vertShaderStr()       {static ShaderResource s{"/tp_maps/MaterialShader.render.vert"};  return s;}
+ShaderResource& fragShaderStr()       {static ShaderResource s{"/tp_maps/MaterialShader.render.frag"};  return s;}
+ShaderResource& vertShaderStrPicking(){static ShaderResource s{"/tp_maps/MaterialShader.picking.vert"}; return s;}
+ShaderResource& fragShaderStrPicking(){static ShaderResource s{"/tp_maps/MaterialShader.picking.frag"}; return s;}
+ShaderResource& vertShaderStrLight()  {static ShaderResource s{"/tp_maps/MaterialShader.light.vert"};   return s;}
+ShaderResource& fragShaderStrLight()  {static ShaderResource s{"/tp_maps/MaterialShader.light.frag"};   return s;}
+
+//##################################################################################################
+struct LightLocations_lt
+{
+  // The matrix that transforms world coords onto the light texture.
+  GLint worldToLightViewLocation{0};
+  GLint worldToLightProjLocation{0};
+
+  GLint         positionLocation{0};
+  GLint        directionLocation{0};
+  GLint          ambientLocation{0};
+  GLint          diffuseLocation{0};
+  GLint     diffuseScaleLocation{0};
+  GLint         constantLocation{0};
+  GLint           linearLocation{0};
+  GLint        quadraticLocation{0};
+  GLint   spotLightBlendLocation{0};
+  GLint             nearLocation{0};
+  GLint              farLocation{0};  
+  GLint      offsetScaleLocation{0};
+
+  GLint   lightTextureIDLocation{0};
+};
+
+//##################################################################################################
+struct UniformLocations_lt
+{
+  GLint                     mMatrixLocation{0};
+  GLint                    mvMatrixLocation{0};
+  GLint                   mvpMatrixLocation{0};
+  GLint                     vMatrixLocation{0};
+  GLint                  mInvMatrixLocation{0};
+  GLint                    uvMatrixLocation{0};
+
+  GLint                cameraOriginLocation{0};
+
+  GLint          materialUseAmbientLocation{0};
+  GLint          materialUseDiffuseLocation{0};
+  GLint            materialUseNdotLLocation{0};
+  GLint      materialUseAttenuationLocation{0};
+  GLint           materialUseShadowLocation{0};
+  GLint        materialUseLightMaskLocation{0};
+  GLint       materialUseReflectionLocation{0};
+
+  GLint         materialAlbedoScaleLocation{0};
+
+  GLint                     txlSizeLocation{0};
+  GLint              discardOpacityLocation{0};
+  GLint                lightOffsetsLocation{0};
+
+  GLint      rgbaTextureLocation{0};
+  GLint   normalsTextureLocation{0};
+  GLint     rmttrTextureLocation{0};
+
+  std::vector<LightLocations_lt> lightLocations;
+};
+
 }
 
 //##################################################################################################
 struct MaterialShader::Private
 {
-  GLint matrixLocation           {0};
+  TP_REF_COUNT_OBJECTS("tp_math_utils::MaterialShader::Private");
+  TP_NONCOPYABLE(Private);
 
-  GLint materialAmbientLocation  {0};
-  GLint materialDiffuseLocation  {0};
-  GLint materialSpecularLocation {0};
-  GLint materialShininessLocation{0};
-  GLint materialAlphaLocation    {0};
+  MaterialShader* q;
 
-  GLint lightPositionLocation    {0};
-  GLint lightAmbientLocation     {0};
-  GLint lightDiffuseLocation     {0};
-  GLint lightSpecularLocation    {0};
+  ShaderType shaderType{ShaderType::Render};
 
-  GLint pickingLocation          {0};
-  GLint pickingIDLocation        {0};
+  size_t maxLights{1};
+
+  UniformLocations_lt renderLocations;
+  UniformLocations_lt renderHDRLocations;
+
+  GLint  pickingMVPMatrixLocation{0};
+  GLint         pickingIDLocation{0};
+
+  GLint    lightMVPMatrixLocation{0};
+  GLint     lightUVMatrixLocation{0};
+  GLint  lightRGBATextureLocation{0};
+
+  GLuint emptyTextureID{0};
+  GLuint emptyNormalTextureID{0};
+
+  //################################################################################################
+  Private(MaterialShader* q_):
+    q(q_)
+  {
+
+  }
+
+  //################################################################################################
+  ~Private()
+  {
+    if(q->map() && emptyTextureID)
+    {
+      q->map()->makeCurrent();
+      q->map()->deleteTexture(emptyTextureID);
+      q->map()->deleteTexture(emptyNormalTextureID);
+    }
+  }
 
   //################################################################################################
   void draw(GLenum mode, MaterialShader::VertexBuffer* vertexBuffer)
   {
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     tpBindVertexArray(vertexBuffer->vaoID);
-    tpDrawElements(mode,
-                   vertexBuffer->indexCount,
-                   GL_UNSIGNED_SHORT,
-                   nullptr);
+    tpDrawElements(mode, vertexBuffer->indexCount, GL_UNSIGNED_INT, nullptr);
     tpBindVertexArray(0);
+#else
+    vertexBuffer->bindVBO();
+    glDrawArrays(mode, 0, vertexBuffer->indexCount);
+#endif
   }
 };
 
 //##################################################################################################
-MaterialShader::MaterialShader():
-  Shader(),
-  d(new Private())
+MaterialShader::MaterialShader(Map* map, tp_maps::OpenGLProfile openGLProfile, bool compileShader):
+  Geometry3DShader(map, openGLProfile),
+  d(new Private(this))
 {
-  compile(vertexShaderStr,
-          fragmentShaderStr,
-          [](GLuint program)
+  TP_TIME_SCOPE("MaterialShader::MaterialShader");
+  auto bindTexture = [&](const TPPixel& color)
   {
-    glBindAttribLocation(program, 0, "inVertex");
-    glBindAttribLocation(program, 1, "inNormal");
-  },
-  [this](GLuint program)
+    tp_image_utils::ColorMap textureData{1, 1, nullptr, color};
+    BasicTexture texture(map, textureData);
+    return texture.bindTexture();
+  };
+
+  d->emptyTextureID       = bindTexture({  0,   0,   0, 255});
+  d->emptyNormalTextureID = bindTexture({127, 127, 255, 255});
+
+  if(compileShader)
   {
-    d->matrixLocation            = glGetUniformLocation(program, "matrix");
+    auto compileOtherShader = [&](ShaderResource& vertStr, ShaderResource& fragStr, ShaderType shaderType)
+    {
+      compile(vertStr.data(openGLProfile, shaderType), fragStr.data(openGLProfile, shaderType), [](auto){}, [](auto){}, shaderType);
+    };
 
-    d->materialAmbientLocation   = glGetUniformLocation(program, "material.ambient");
-    d->materialDiffuseLocation   = glGetUniformLocation(program, "material.diffuse");
-    d->materialSpecularLocation  = glGetUniformLocation(program, "material.specular");
-    d->materialShininessLocation = glGetUniformLocation(program, "material.shininess");
-    d->materialAlphaLocation     = glGetUniformLocation(program, "material.alpha");
+    if(map->extendedFBO() == ExtendedFBO::Yes)
+      compileRenderShader([](auto,auto){}, [](auto){}, [](auto){}, ShaderType::RenderExtendedFBO);
+    else
+      compileRenderShader([](auto,auto){}, [](auto){}, [](auto){}, ShaderType::Render);
 
-    d->lightPositionLocation     = glGetUniformLocation(program, "light.position");
-    d->lightAmbientLocation      = glGetUniformLocation(program, "light.ambient");
-    d->lightDiffuseLocation      = glGetUniformLocation(program, "light.diffuse");
-    d->lightSpecularLocation     = glGetUniformLocation(program, "light.specular");
-
-    d->pickingLocation           = glGetUniformLocation(program, "picking");
-    d->pickingIDLocation         = glGetUniformLocation(program, "pickingID");
-
-    const char* shaderName = "MaterialShader";
-    if(d->matrixLocation<0)tpWarning() << shaderName << " d->matrixLocation: " << d->matrixLocation;
-  });
+    compileOtherShader(vertShaderStrPicking(), fragShaderStrPicking(), ShaderType::Picking);
+    compileOtherShader(vertShaderStrLight(), fragShaderStrLight(), ShaderType::Light);
+  }
 }
 
 //##################################################################################################
@@ -159,98 +204,444 @@ MaterialShader::~MaterialShader()
   delete d;
 }
 
+//################################################################################################
+void MaterialShader::compile(const char* vertShaderStr,
+                             const char* fragShaderStr,
+                             const std::function<void(GLuint)>& bindLocations,
+                             const std::function<void(GLuint)>& getLocations,
+                             ShaderType shaderType)
+{
+  Shader::compile(vertShaderStr,
+                  fragShaderStr,
+                  [&](GLuint program)
+  {
+    switch(shaderType)
+    {
+    case ShaderType::Render: [[fallthrough]];
+    case ShaderType::RenderExtendedFBO:
+    {
+      glBindAttribLocation(program, 0, "inVertex");
+      glBindAttribLocation(program, 1, "inNormal");
+      glBindAttribLocation(program, 2, "inTexture");
+      break;
+    }
+
+    case ShaderType::Picking:
+    {
+      glBindAttribLocation(program, 0, "inVertex");
+      break;
+    }
+    case ShaderType::Light:
+    {
+      glBindAttribLocation(program, 0, "inVertex");
+      glBindAttribLocation(program, 2, "inTexture");
+      break;
+    }
+    }
+
+    bindLocations(program);
+
+  },
+  [&](GLuint program)
+  {
+    auto exec = [&](UniformLocations_lt& locations)
+    {
+      locations.mMatrixLocation           = glGetUniformLocation(program, "m");
+      locations.mvMatrixLocation          = glGetUniformLocation(program, "mv");
+      locations.mvpMatrixLocation         = glGetUniformLocation(program, "mvp");
+      locations.vMatrixLocation           = glGetUniformLocation(program, "v");
+      locations.mInvMatrixLocation        = glGetUniformLocation(program, "mInv");
+      locations.uvMatrixLocation          = glGetUniformLocation(program, "uvMatrix");
+
+      locations.cameraOriginLocation      = glGetUniformLocation(program, "cameraOrigin_world");
+
+      locations.    materialUseAmbientLocation = glGetUniformLocation(program, "material.useAmbient"    );
+      locations.    materialUseDiffuseLocation = glGetUniformLocation(program, "material.useDiffuse"    );
+      locations.      materialUseNdotLLocation = glGetUniformLocation(program, "material.useNdotL"      );
+      locations.materialUseAttenuationLocation = glGetUniformLocation(program, "material.useAttenuation");
+      locations.     materialUseShadowLocation = glGetUniformLocation(program, "material.useShadow"     );
+      locations.  materialUseLightMaskLocation = glGetUniformLocation(program, "material.useLightMask"  );
+      locations. materialUseReflectionLocation = glGetUniformLocation(program, "material.useReflection" );
+
+      locations.  materialAlbedoScaleLocation = glGetUniformLocation(program, "material.albedoScale"  );
+
+      locations.txlSizeLocation           = glGetUniformLocation(program, "txlSize");
+      locations.discardOpacityLocation    = glGetUniformLocation(program, "discardOpacity");
+      locations.lightOffsetsLocation     = glGetUniformLocation(program, "lightOffsets");
+
+      locations.     rgbaTextureLocation = glGetUniformLocation(program, "rgbaTexture"     );
+      locations.  normalsTextureLocation = glGetUniformLocation(program, "normalsTexture"  );
+      locations.    rmttrTextureLocation = glGetUniformLocation(program, "rmttrTexture"    );
+
+      const auto& lights = map()->lights();
+      size_t iMax = tpMin(d->maxLights, lights.size());
+
+      locations.lightLocations.resize(iMax);
+      for(size_t i=0; i<locations.lightLocations.size(); i++)
+      {
+        auto& lightLocations = locations.lightLocations.at(i);
+
+        auto ii = std::to_string(i);
+
+        lightLocations.worldToLightViewLocation = glGetUniformLocation(program, replaceLight(ii, "", "worldToLight%_view").c_str());
+        lightLocations.worldToLightProjLocation = glGetUniformLocation(program, replaceLight(ii, "", "worldToLight%_proj").c_str());
+
+        lightLocations.positionLocation         = glGetUniformLocation(program, replaceLight(ii, "", "light%.position").c_str());
+        lightLocations.directionLocation        = glGetUniformLocation(program, replaceLight(ii, "", "light%Direction_world").c_str());
+        lightLocations.ambientLocation          = glGetUniformLocation(program, replaceLight(ii, "", "light%.ambient").c_str());
+        lightLocations.diffuseLocation          = glGetUniformLocation(program, replaceLight(ii, "", "light%.diffuse").c_str());
+        lightLocations.diffuseScaleLocation     = glGetUniformLocation(program, replaceLight(ii, "", "light%.diffuseScale").c_str());
+
+        lightLocations.constantLocation         = glGetUniformLocation(program, replaceLight(ii, "", "light%.constant").c_str());
+        lightLocations.linearLocation           = glGetUniformLocation(program, replaceLight(ii, "", "light%.linear").c_str());
+        lightLocations.quadraticLocation        = glGetUniformLocation(program, replaceLight(ii, "", "light%.quadratic").c_str());
+        lightLocations.spotLightBlendLocation   = glGetUniformLocation(program, replaceLight(ii, "", "light%.spotLightBlend").c_str());
+
+        lightLocations.nearLocation             = glGetUniformLocation(program, replaceLight(ii, "", "light%.near").c_str());
+        lightLocations.farLocation              = glGetUniformLocation(program, replaceLight(ii, "", "light%.far").c_str());
+
+        lightLocations.offsetScaleLocation      = glGetUniformLocation(program, replaceLight(ii, "", "light%.offsetScale").c_str());
+
+        lightLocations.lightTextureIDLocation   = glGetUniformLocation(program, replaceLight(ii, "", "light%Texture").c_str());
+      }
+    };
+
+    switch(shaderType)
+    {
+    case ShaderType::Render:
+    {
+      exec(d->renderLocations);
+      break;
+    }
+
+    case ShaderType::RenderExtendedFBO:
+    {
+      exec(d->renderHDRLocations);
+      break;
+    }
+
+    case ShaderType::Picking:
+    {
+      d->pickingMVPMatrixLocation = glGetUniformLocation(program, "mvp");
+      d->pickingIDLocation        = glGetUniformLocation(program, "pickingID");
+      break;
+    }
+
+    case ShaderType::Light:
+    {
+      d->lightMVPMatrixLocation = glGetUniformLocation(program, "mvp");
+      d->lightUVMatrixLocation    = glGetUniformLocation(program, "uvMatrix");
+      d->lightRGBATextureLocation = glGetUniformLocation(program, "rgbaTexture");
+      break;
+    }
+    }
+
+    getLocations(program);
+  },
+  shaderType);
+}
+
+//##################################################################################################
+void MaterialShader::compileRenderShader(const std::function<void(std::string& vert, std::string& frag)>& modifyShaders,
+                                         const std::function<void(GLuint)>& bindLocations,
+                                         const std::function<void(GLuint)>& getLocations,
+                                         ShaderType shaderType)
+{
+  std::string LIGHT_VERT_VARS;
+  std::string LIGHT_VERT_CALC;
+
+  std::string LIGHT_FRAG_VARS;
+  std::string LIGHT_FRAG_CALC;
+
+  {
+    {
+      //The number of lights we can used is limited by the number of available texture units.
+      d->maxLights=0;
+      GLint textureUnits=8;
+      glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &textureUnits);
+
+      //The number of textures used by the shader and the back buffer but excluding lights.
+      int staticTextures = 5 + 1;
+      if(textureUnits>staticTextures)
+        d->maxLights = size_t(textureUnits) - size_t(staticTextures);
+    }
+
+    LIGHT_FRAG_VARS += "uniform vec3 lightOffsets["+std::to_string(map()->maxSpotLightLevels())+"];\n";
+
+    const auto& lights = map()->lights();
+    size_t iMax = tpMin(d->maxLights, lights.size());
+    for(size_t i=0; i<iMax; i++)
+    {
+      const auto& light = lights.at(i);
+      auto ii = std::to_string(i);
+
+      size_t levels = (light.type==tp_math_utils::LightType::Spot)?map()->maxSpotLightLevels():1;
+      auto ll = std::to_string(levels);
+
+      LIGHT_VERT_VARS += replaceLight(ii, ll, "uniform mat4 worldToLight%_view;\n");
+      LIGHT_VERT_VARS += replaceLight(ii, ll, "uniform mat4 worldToLight%_proj;\n");
+
+      LIGHT_VERT_VARS += replaceLight(ii, ll, "/*TP_GLSL_OUT_V*/vec4 fragPos_light%View;\n\n");
+
+      LIGHT_VERT_CALC += replaceLight(ii, ll, "  fragPos_light%View = worldToLight%_view * (m * vec4(inVertex, 1.0));\n");
+
+      LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform vec3 light%Direction_world;\n");
+      LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform Light light%;\n");
+      LIGHT_FRAG_VARS += replaceLight(ii, ll, "/*TP_GLSL_IN_F*/vec4 fragPos_light%View;\n\n");
+      LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform mat4 worldToLight%_proj;\n");
+
+      LIGHT_FRAG_CALC += "\n  {\n";
+      LIGHT_FRAG_CALC += replaceLight(ii, ll, "    vec3 ldNormalized = normalize(invTBN * light%Direction_world);\n");
+
+      switch(light.type)
+      {
+      case tp_math_utils::LightType::Global:[[fallthrough]];
+      case tp_math_utils::LightType::Directional:
+      {
+        LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform sampler2D light%Texture;\n");
+        LIGHT_FRAG_CALC += replaceLight(ii, ll, "    LightResult r = directionalLight(norm, light%, ldNormalized, light%Texture, lightPosToTexture(fragPos_light%View, vec2(0,0), worldToLight%_proj));\n");
+        break;
+      }
+
+      case tp_math_utils::LightType::Spot:
+      {
+        if(map()->maxSpotLightLevels() == 1)
+        {
+          LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform sampler2D light%Texture;\n");
+          LIGHT_FRAG_CALC += replaceLight(ii, ll, "    float shadow=0.0;\n");
+          LIGHT_FRAG_CALC += replaceLight(ii, ll, "    shadow += spotLightSampleShadow2D(norm, light%, ldNormalized, light%Texture, lightPosToTexture(fragPos_light%View, vec2(0,0), worldToLight%_proj));\n");
+          LIGHT_FRAG_CALC += replaceLight(ii, ll, "    shadow /= totalShadowSamples;\n");
+        }
+        else
+        {
+          LIGHT_FRAG_VARS += replaceLight(ii, ll, "uniform sampler3D light%Texture;\n");
+          LIGHT_FRAG_CALC += replaceLight(ii, ll, "    float shadow=0.0;\n");
+          LIGHT_FRAG_CALC += "    vec2 offset;";
+
+          for (size_t levelIdx=0; levelIdx < levels; ++levelIdx)
+          {
+            LIGHT_FRAG_CALC += replaceLight(ii, std::to_string(levelIdx), "    offset = computeLightOffset(light%, @);\n");
+            LIGHT_FRAG_CALC += replaceLight(ii, std::to_string(levelIdx), "    shadow += spotLightSampleShadow3D(norm, light%, ldNormalized, light%Texture, lightPosToTexture(fragPos_light%View, offset, worldToLight%_proj), lightOffsets[@].z);\n");
+          }
+
+          LIGHT_FRAG_CALC += replaceLight(ii, ll, "    shadow /= totalShadowSamples * @.0;\n");
+          //LIGHT_FRAG_CALC += replaceLight(ii, ll, "    LightResult r = spotLight3D(norm, light%, ldNormalized, light%Texture, lightPosToTexture(fragPos_light%View, vec2(0,0), worldToLight%_proj), shadow);\n");
+        }
+
+        LIGHT_FRAG_CALC += replaceLight(ii, ll, "    shadow = mix(1.0, shadow, material.useShadow);\n");
+        LIGHT_FRAG_CALC += replaceLight(ii, ll, "    LightResult r = spotLight(norm, light%, ldNormalized, lightPosToTexture(fragPos_light%View, vec2(0,0), worldToLight%_proj), shadow);\n");
+        break;
+      }
+      }
+
+      LIGHT_FRAG_CALC += "    ambient  += r.ambient;\n";
+      LIGHT_FRAG_CALC += "    diffuse  += r.diffuse;\n";
+      LIGHT_FRAG_CALC += "    specular += r.specular;\n";
+      LIGHT_FRAG_CALC += "  }\n";
+    }
+  }
+
+  LIGHT_VERT_VARS = parseShaderString(LIGHT_VERT_VARS, openGLProfile(), shaderType);
+  LIGHT_VERT_CALC = parseShaderString(LIGHT_VERT_CALC, openGLProfile(), shaderType);
+  LIGHT_FRAG_VARS = parseShaderString(LIGHT_FRAG_VARS, openGLProfile(), shaderType);
+  LIGHT_FRAG_CALC = parseShaderString(LIGHT_FRAG_CALC, openGLProfile(), shaderType);
+
+  std::string vertStr = vertShaderStr().data(openGLProfile(), shaderType);
+  std::string fragStr = fragShaderStr().data(openGLProfile(), shaderType);
+
+  tp_utils::replace(vertStr, "/*LIGHT_VERT_VARS*/", LIGHT_VERT_VARS);
+  tp_utils::replace(vertStr, "/*LIGHT_VERT_CALC*/", LIGHT_VERT_CALC);
+  tp_utils::replace(fragStr, "/*LIGHT_FRAG_VARS*/", LIGHT_FRAG_VARS);
+  tp_utils::replace(fragStr, "/*LIGHT_FRAG_CALC*/", LIGHT_FRAG_CALC);
+
+  tp_utils::replace(fragStr, "/*TP_SHADOW_SAMPLES*/", std::to_string(map()->shadowSamples()));
+
+  modifyShaders(vertStr, fragStr);
+
+  compile(vertStr.c_str(), fragStr.c_str(), bindLocations, getLocations, shaderType);
+}
+
 //##################################################################################################
 void MaterialShader::use(ShaderType shaderType)
 {
+  d->shaderType = shaderType;
+
   //https://webglfundamentals.org/webgl/lessons/webgl-and-alpha.html
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
 
   Shader::use(shaderType);
-
-  glUniform1f(d->pickingLocation, 0.0f);
-  glUniform4f(d->pickingIDLocation, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 //##################################################################################################
-void MaterialShader::setMaterial(const Material& material)
+void MaterialShader::setMaterial(const tp_math_utils::Material& material)
 {
-  glUniform3fv(d->materialAmbientLocation,  1, (GLfloat*)&material.ambient  );
-  glUniform3fv(d->materialDiffuseLocation,  1, (GLfloat*)&material.diffuse  );
-  glUniform3fv(d->materialSpecularLocation, 1, (GLfloat*)&material.specular );
-  glUniform1f(d->materialShininessLocation,               material.shininess);
-  glUniform1f(d->materialAlphaLocation,                   material.alpha    );
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    glUniform1f (locations.    materialUseAmbientLocation, material.useAmbient    );
+    glUniform1f (locations.    materialUseDiffuseLocation, material.useDiffuse    );
+    glUniform1f (locations.      materialUseNdotLLocation, material.useNdotL      );
+    glUniform1f (locations.materialUseAttenuationLocation, material.useAttenuation);
+    glUniform1f (locations.     materialUseShadowLocation, material.useShadow     );
+    glUniform1f (locations.  materialUseLightMaskLocation, material.useLightMask  );
+    glUniform1f (locations. materialUseReflectionLocation, material.useReflection );
+
+    glUniform1f(locations.    materialAlbedoScaleLocation, material.albedoScale   );
+
+    glUniformMatrix3fv(locations.uvMatrixLocation, 1, GL_FALSE, glm::value_ptr(material.uvMatrix()));
+  };
+
+  if(d->shaderType == ShaderType::Render)
+    exec(d->renderLocations);
+
+  else if(d->shaderType == ShaderType::RenderExtendedFBO)
+    exec(d->renderHDRLocations);
+
+  else if(d->shaderType == ShaderType::Light)
+    glUniformMatrix3fv(d->lightUVMatrixLocation, 1, GL_FALSE, glm::value_ptr(material.uvMatrix()));
+
 }
 
 //##################################################################################################
-void MaterialShader::setLight(const Light& light)
+void MaterialShader::setLights(const std::vector<tp_math_utils::Light>& lights, const std::vector<FBO>& lightBuffers)
 {
-  glUniform3fv(d->lightAmbientLocation , 1, (GLfloat*)&light.ambient );
-  glUniform3fv(d->lightDiffuseLocation , 1, (GLfloat*)&light.diffuse );
-  glUniform3fv(d->lightSpecularLocation, 1, (GLfloat*)&light.specular);
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    {
+      size_t iMax = tpMin(lights.size(), locations.lightLocations.size());
+      for(size_t i=0; i<iMax; i++)
+      {
+        const auto& light = lights.at(i);
+        const auto& lightLocations = locations.lightLocations.at(i);
+
+        glm::vec3 position = light.position();
+        glm::vec3 direction = light.direction();
+
+        if(lightLocations.   positionLocation>=0)glUniform3fv(lightLocations.   positionLocation, 1, &position.x         );
+        if(lightLocations.  directionLocation>=0)glUniform3fv(lightLocations.  directionLocation, 1, &direction.x        );
+        if(lightLocations.    ambientLocation>=0)glUniform3fv(lightLocations.    ambientLocation, 1, &light.ambient.x    );
+        if(lightLocations.    diffuseLocation>=0)glUniform3fv(lightLocations.    diffuseLocation, 1, &light.diffuse.x    );
+        if(lightLocations.offsetScaleLocation>=0)glUniform3fv(lightLocations.offsetScaleLocation, 1, &light.offsetScale.x);
+
+        glUniform1f(lightLocations.  diffuseScaleLocation, light.diffuseScale  );
+        glUniform1f(lightLocations.      constantLocation, light.constant      );
+        glUniform1f(lightLocations.        linearLocation, light.linear        );
+        glUniform1f(lightLocations.     quadraticLocation, light.quadratic     );
+        glUniform1f(lightLocations.spotLightBlendLocation, light.spotLightBlend);
+        glUniform1f(lightLocations.          nearLocation, light.near          );
+        glUniform1f(lightLocations.           farLocation, light.far           );
+      }
+    }
+
+    {
+      size_t iMax = tpMin(lightBuffers.size(), locations.lightLocations.size());
+      for(size_t i=0; i<iMax; i++)
+      {
+        const auto& lightBuffer = lightBuffers.at(i);
+        const auto& lightLocations = locations.lightLocations.at(i);
+
+        glUniformMatrix4fv(lightLocations.worldToLightViewLocation, 1, GL_FALSE, glm::value_ptr(lightBuffer.worldToTexture[0].v));
+        glUniformMatrix4fv(lightLocations.worldToLightProjLocation, 1, GL_FALSE, glm::value_ptr(lightBuffer.worldToTexture[0].p));
+
+        glActiveTexture(GLenum(GL_TEXTURE6 + i));
+
+        if(lightBuffer.levels == 1)
+          glBindTexture(GL_TEXTURE_2D, lightBuffer.depthID);
+        else
+          glBindTexture(GL_TEXTURE_3D, lightBuffer.depthID);
+
+        glUniform1i(lightLocations.lightTextureIDLocation, GLint(6 + i));
+      }
+    }
+
+    {
+      glm::vec2 txlSize{1.0f, 1.0f};
+      if(!lightBuffers.empty())
+        txlSize = glm::vec2(1.0, 1.0) / glm::vec2(lightBuffers[0].width, lightBuffers[0].height);
+      glUniform2fv(locations.txlSizeLocation, 1, &txlSize.x);
+    }
+  };
+
+  if(d->shaderType == ShaderType::Render)
+    exec(d->renderLocations);
+  else if(d->shaderType == ShaderType::RenderExtendedFBO)
+    exec(d->renderHDRLocations);
 }
 
 //##################################################################################################
-void MaterialShader::setMatrix(const glm::mat4& matrix)
+void MaterialShader::setLightOffsets(size_t renderedlightLevels)
 {
-  glUniformMatrix4fv(d->matrixLocation, 1, GL_FALSE, glm::value_ptr(matrix));
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    size_t lightLevels = map()->maxSpotLightLevels();
+
+    std::vector<glm::vec3> lightOffsets;
+    lightOffsets.reserve(lightLevels);
+    for (size_t levelIndex = 0; levelIndex < lightLevels; ++levelIndex)
+    {
+      // If the light level hasn't been rendered, re-use an existing light level.
+      size_t availableLevelIdx = levelIndex % renderedlightLevels;
+      float levelTexCoord = float(availableLevelIdx)/float(lightLevels-1);
+      lightOffsets.emplace_back(glm::vec3(tp_math_utils::Light::lightLevelOffsets()[availableLevelIdx], levelTexCoord));
+    }
+    glUniform3fv(locations.lightOffsetsLocation, lightLevels, glm::value_ptr(lightOffsets[0]));
+  };
+
+  if(d->shaderType == ShaderType::Render)
+    exec(d->renderLocations);
+  else if(d->shaderType == ShaderType::RenderExtendedFBO)
+    exec(d->renderHDRLocations);
 }
 
 //##################################################################################################
-MaterialShader::VertexBuffer* MaterialShader::generateVertexBuffer(Map* map,
-                                                                   const std::vector<GLushort>& indexes,
-                                                                   const std::vector<MaterialShader::Vertex>& verts)const
+void MaterialShader::setMatrix(const glm::mat4& m, const glm::mat4& v, const glm::mat4& p)
 {
-  VertexBuffer* vertexBuffer = new VertexBuffer(map, this);
+  glm::mat4 mv = v*m;
+  glm::mat4 mvp = p*v*m;
+  glm::mat4 mInv = glm::inverse(m);
 
-  vertexBuffer->vertexCount = verts.size();
-  vertexBuffer->indexCount = indexes.size();
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    glUniformMatrix4fv(locations.   mMatrixLocation, 1, GL_FALSE, glm::value_ptr(m   ));
+    glUniformMatrix4fv(locations.  mvMatrixLocation, 1, GL_FALSE, glm::value_ptr(mv  ));
+    glUniformMatrix4fv(locations. mvpMatrixLocation, 1, GL_FALSE, glm::value_ptr(mvp ));
+    glUniformMatrix4fv(locations.   vMatrixLocation, 1, GL_FALSE, glm::value_ptr(v   ));
+    glUniformMatrix4fv(locations.mInvMatrixLocation, 1, GL_FALSE, glm::value_ptr(mInv));
 
-  glGenBuffers(1, &vertexBuffer->iboID);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()*sizeof(GLushort), indexes.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    if(locations.cameraOriginLocation>=0)
+    {
+      glm::vec3 cameraOrigin_world = glm::inverse(v) * glm::vec4(0,0,0,1);
+      glUniform3fv(locations.cameraOriginLocation, 1, &cameraOrigin_world.x);
+    }
+  };
 
-  glGenBuffers(1, &vertexBuffer->vboID);
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(MaterialShader::Vertex), verts.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  switch(d->shaderType)
+  {
+  case ShaderType::Render:
+  {
+    exec(d->renderLocations);
+    break;
+  }
 
-  tpGenVertexArrays(1, &vertexBuffer->vaoID);
-  tpBindVertexArray(vertexBuffer->vaoID);
+  case ShaderType::RenderExtendedFBO:
+  {
+    exec(d->renderHDRLocations);
+    break;
+  }
 
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(MaterialShader::Vertex), (void*)(0));
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(MaterialShader::Vertex), (void*)(sizeof(float)*3));
-  glEnableVertexAttribArray(0);
-  glEnableVertexAttribArray(1);
-  glDisableVertexAttribArray(3);
+  case ShaderType::Picking:
+  {
+    glUniformMatrix4fv(d->pickingMVPMatrixLocation, 1, GL_FALSE, glm::value_ptr(mvp));
+    break;
+  }
 
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
-
-  tpBindVertexArray(0);
-
-  return vertexBuffer;
-}
-
-//##################################################################################################
-MaterialShader::VertexBuffer::VertexBuffer(Map* map_, const Shader *shader_):
-  map(map_),
-  shader(shader_)
-{
-
-}
-//##################################################################################################
-MaterialShader::VertexBuffer::~VertexBuffer()
-{
-  if(!vaoID)
-    return;
-
-  map->makeCurrent();
-  tpDeleteVertexArrays(1, &vaoID);
-  glDeleteBuffers(1, &iboID);
-  glDeleteBuffers(1, &vboID);
+  case ShaderType::Light:
+  {
+    glUniformMatrix4fv(d->lightMVPMatrixLocation, 1, GL_FALSE, glm::value_ptr(mvp));
+    break;
+  }
+  }
 }
 
 //##################################################################################################
@@ -265,9 +656,77 @@ void MaterialShader::drawPicking(GLenum mode,
                                  const glm::vec4& pickingID)
 {
   glDisable(GL_BLEND);
-  glUniform1f(d->pickingLocation, 1.0f);
   glUniform4fv(d->pickingIDLocation, 1, &pickingID.x);
   d->draw(mode, vertexBuffer);
+}
+
+//##################################################################################################
+void MaterialShader::invalidate()
+{
+  d->emptyTextureID = 0;
+  d->emptyNormalTextureID = 0;
+
+  Geometry3DShader::invalidate();
+}
+
+//##################################################################################################
+void MaterialShader::drawVertexBuffer(GLenum mode, VertexBuffer* vertexBuffer)
+{
+  d->draw(mode, vertexBuffer);
+}
+
+//##################################################################################################
+void MaterialShader::setTextures(GLuint rgbaTextureID,
+                                 GLuint normalsTextureID,
+                                 GLuint rmttrTextureID)
+{
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, rgbaTextureID);
+    glUniform1i(locations.rgbaTextureLocation, 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, normalsTextureID);
+    glUniform1i(locations.normalsTextureLocation, 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, rmttrTextureID);
+    glUniform1i(locations.rmttrTextureLocation, 2);
+  };
+
+  if(d->shaderType == ShaderType::Render)
+    exec(d->renderLocations);
+  else if(d->shaderType == ShaderType::RenderExtendedFBO)
+    exec(d->renderHDRLocations);
+  else if(d->shaderType == ShaderType::Light)
+  {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, rgbaTextureID);
+    glUniform1i(d->lightRGBATextureLocation, 0);
+  }
+}
+
+//##################################################################################################
+void MaterialShader::setBlankTextures()
+{
+  setTextures(d->emptyTextureID,
+              d->emptyNormalTextureID,
+              d->emptyTextureID);
+}
+
+//##################################################################################################
+void MaterialShader::setDiscardOpacity(float discardOpacity)
+{
+  auto exec = [&](const UniformLocations_lt& locations)
+  {
+    glUniform1f(locations.discardOpacityLocation, discardOpacity);
+  };
+
+  if(d->shaderType == ShaderType::Render)
+    exec(d->renderLocations);
+  else if(d->shaderType == ShaderType::RenderExtendedFBO)
+    exec(d->renderHDRLocations);
 }
 
 }

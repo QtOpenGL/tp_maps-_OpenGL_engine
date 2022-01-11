@@ -3,6 +3,8 @@
 #include "tp_maps/Font.h"
 #include "tp_maps/Map.h"
 
+#include "tp_math_utils/Globals.h"
+
 #include "tp_utils/DebugUtils.h"
 #include "tp_utils/TimeUtils.h"
 
@@ -14,51 +16,25 @@ namespace tp_maps
 namespace
 {
 
-const char* vertexShaderStr =
-    TP_VERT_SHADER_HEADER
-    "//FontShader vertexShaderStr\n"
-    TP_GLSL_IN_V"vec3 inVertex;\n"
-    TP_GLSL_IN_V"vec3 inNormal;\n"
-    TP_GLSL_IN_V"vec2 inTexture;\n"
-    "uniform mat4 matrix;\n"
-    TP_GLSL_OUT_V"vec3 LightVector0;\n"
-    TP_GLSL_OUT_V"vec3 EyeNormal;\n"
-    TP_GLSL_OUT_V"vec2 texCoordinate;\n"
-    "void main()\n"
-    "{\n"
-    "  gl_Position = matrix * vec4(inVertex, 1.0);\n"
-    "  LightVector0 = vec3(1.0, 1.0, 1.0);\n"
-    "  EyeNormal = inNormal;\n"
-    "  texCoordinate = inTexture;\n"
-    "}\n";
-
-const char* fragmentShaderStr =
-    TP_FRAG_SHADER_HEADER
-    "//FontShader fragmentShaderStr\n"
-    TP_GLSL_IN_F"vec3 LightVector0;\n"
-    TP_GLSL_IN_F"vec3 EyeNormal;\n"
-    TP_GLSL_IN_F"vec2 texCoordinate;\n"
-    "uniform sampler2D textureSampler;\n"
-    TP_GLSL_GLFRAGCOLOR_DEF
-    "void main()\n"
-    "{\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = " TP_GLSL_TEXTURE "(textureSampler, texCoordinate);\n"
-    "  if(" TP_GLSL_GLFRAGCOLOR ".a < 0.01)\n"
-    "    discard;\n"
-    "}\n";
+ShaderResource& vertShaderStr(){static ShaderResource s{"/tp_maps/FontShader.vert"}; return s;}
+ShaderResource& fragShaderStr(){static ShaderResource s{"/tp_maps/FontShader.frag"}; return s;}
 
 //##################################################################################################
 struct Vertex_lt
 {
-  glm::vec3 position;
-  glm::vec3 normal;
-  glm::vec2 texture;
+  glm::vec3 position{};
+  glm::vec3 normal{};
+  glm::vec2 texture{};
 };
 }
 
 //##################################################################################################
 struct FontShader::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::FontShader::Private");
+  TP_NONCOPYABLE(Private);
+  Private() = default;
+
   GLint matrixLocation{0};
   GLint colorLocation{0};
 };
@@ -66,8 +42,10 @@ struct FontShader::Private
 //##################################################################################################
 struct FontShader::PreparedString::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::FontShader::PreparedString::Private");
+  TP_NONCOPYABLE(Private);
+
   Map* map;
-  ShaderPointer shader;
 
   //The Vertex Array Object
   GLuint vaoID{0};
@@ -85,9 +63,8 @@ struct FontShader::PreparedString::Private
   bool valid{false};
 
   //################################################################################################
-  Private(Map* map_, const Shader* shader_):
-    map(map_),
-    shader(shader_)
+  Private(Map* map_):
+    map(map_)
   {
 
   }
@@ -99,13 +76,31 @@ struct FontShader::PreparedString::Private
   }
 
   //################################################################################################
+  void bindVBO()
+  {
+    glBindBuffer(GL_ARRAY_BUFFER, vboID);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), tpVoidLiteral( 0));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), tpVoidLiteral(12));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), tpVoidLiteral(24));
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glDisableVertexAttribArray(3);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, iboID);
+  }
+
+  //################################################################################################
   void freeBuffers()
   {
     if(!vaoID)
       return;
 
     map->makeCurrent();
+
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     tpDeleteVertexArrays(1, &vaoID);
+#endif
+
     glDeleteBuffers(1, &iboID);
     glDeleteBuffers(1, &vboID);
 
@@ -119,15 +114,15 @@ struct FontShader::PreparedString::Private
 };
 
 //##################################################################################################
-FontShader::FontShader(const char* vertexShader, const char* fragmentShader):
-  Shader(),
+FontShader::FontShader(Map* map, tp_maps::OpenGLProfile openGLProfile, const char* vertexShader, const char* fragmentShader):
+  Shader(map, openGLProfile),
   d(new Private())
 {
   if(!vertexShader)
-    vertexShader = vertexShaderStr;
+    vertexShader = vertShaderStr().data(openGLProfile, ShaderType::Render);
 
   if(!fragmentShader)
-    fragmentShader = fragmentShaderStr;
+    fragmentShader = fragShaderStr().data(openGLProfile, ShaderType::Render);
 
   compile(vertexShader,
           fragmentShader,
@@ -140,8 +135,11 @@ FontShader::FontShader(const char* vertexShader, const char* fragmentShader):
   [this](GLuint program)
   {
     d->matrixLocation = glGetUniformLocation(program, "matrix");
+    d->colorLocation  = glGetUniformLocation(program, "color");
+
     const char* shaderName = "FontShader";
     if(d->matrixLocation<0)tpWarning() << shaderName << " d->matrixLocation: " << d->matrixLocation;
+    if(d->colorLocation<0)tpWarning() << shaderName << " d->colorLocation: " << d->colorLocation;
   });
 }
 
@@ -166,6 +164,12 @@ void FontShader::use(ShaderType shaderType)
 void FontShader::setMatrix(const glm::mat4& matrix)
 {
   glUniformMatrix4fv(d->matrixLocation, 1, GL_FALSE, glm::value_ptr(matrix));
+}
+
+//##################################################################################################
+void FontShader::setColor(const glm::vec4& color)
+{
+  glUniform4fv(d->colorLocation, 1, &color.x);
 }
 
 //##################################################################################################
@@ -207,21 +211,22 @@ void FontShader::drawPreparedString(PreparedString& preparedString)
 
       for(size_t i=0; i<4; i++)
       {
-        Vertex_lt vert;
-        vert.position = {glyph.vertices[i], 0.0f};
+        Vertex_lt& vert = verts.emplace_back();
+        vert.position = {glyph.vertices.at(i), 0.0f};
         if(preparedString.config().topDown)
           vert.position.y = -vert.position.y;
-        vert.texture = glyph.textureCoords[i];
+        vert.texture = glyph.textureCoords.at(i);
         vert.normal = {0.0f, 0.0f, 1.0f};
-        verts.push_back(vert);
       }
     }
 
     if(indexes.empty() || verts.empty())
       return;
 
-    preparedString.d->vertexCount = GLuint(verts.size());
     preparedString.d->indexCount  = GLuint(indexes.size());
+
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
+    preparedString.d->vertexCount = GLuint(verts.size());
 
     glGenBuffers(1, &preparedString.d->iboID);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, preparedString.d->iboID);
@@ -235,41 +240,47 @@ void FontShader::drawPreparedString(PreparedString& preparedString)
 
     tpGenVertexArrays(1, &preparedString.d->vaoID);
     tpBindVertexArray(preparedString.d->vaoID);
-
-    glBindBuffer(GL_ARRAY_BUFFER, preparedString.d->vboID);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), reinterpret_cast<void*>(0));
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), reinterpret_cast<void*>(sizeof(float)*3));
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex_lt), reinterpret_cast<void*>(sizeof(float)*6));
-    glEnableVertexAttribArray(0);
-    glEnableVertexAttribArray(1);
-    glEnableVertexAttribArray(2);
-    glDisableVertexAttribArray(3);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, preparedString.d->iboID);
-
+    preparedString.d->bindVBO();
     tpBindVertexArray(0);
+#else
+    preparedString.d->vertexCount = GLuint(indexes.size());
+
+    std::vector<Vertex_lt> indexedVerts;
+    indexedVerts.reserve(indexes.size());
+    for(auto index : indexes)
+      indexedVerts.push_back(verts.at(size_t(index)));
+
+    glGenBuffers(1, &preparedString.d->vboID);
+    glBindBuffer(GL_ARRAY_BUFFER, preparedString.d->vboID);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(indexedVerts.size()*sizeof(Vertex_lt)), indexedVerts.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+#endif
 
     preparedString.d->valid = true;
   }
 
   if(preparedString.d->valid)
   {
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     tpBindVertexArray(preparedString.d->vaoID);
     tpDrawElements(GL_TRIANGLES,
                    preparedString.d->indexCount,
                    GL_UNSIGNED_SHORT,
                    nullptr);
     tpBindVertexArray(0);
+#else
+    preparedString.d->bindVBO();
+    glDrawArrays(GL_TRIANGLES, 0, preparedString.d->indexCount);
+#endif
   }
 }
 
 //##################################################################################################
-FontShader::PreparedString::PreparedString(const Shader* shader,
-                                           FontRenderer* fontRenderer,
+FontShader::PreparedString::PreparedString(FontRenderer* fontRenderer,
                                            const std::u16string& text,
                                            const PreparedStringConfig& config):
   tp_maps::PreparedString(fontRenderer, text, config),
-  d(new Private(fontRenderer->map(), shader))
+  d(new Private(fontRenderer->map()))
 {
 
 }

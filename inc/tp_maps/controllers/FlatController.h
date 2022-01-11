@@ -2,6 +2,7 @@
 #define tp_maps_FlatController_h
 
 #include "tp_maps/Controller.h"
+#include "tp_maps/MouseEvent.h"
 
 namespace tp_maps
 {
@@ -14,72 +15,82 @@ public:
   FlatController(Map* map);
 
   //################################################################################################
-  glm::vec3 focalPoint()const;
+  glm::vec3 focalPoint() const;
 
   //################################################################################################
   void setFocalPoint(const glm::vec3& focalPoint);
 
   //################################################################################################
-  float distance()const;
+  float distance() const;
 
   //################################################################################################
   void setDistance(float distance);
 
   //################################################################################################
-  bool allowRotation()const;
+  bool allowRotation() const;
 
   //################################################################################################
   void setAllowRotation(bool allowRotation);
 
   //################################################################################################
-  bool variableViewAngle()const;
+  bool variableViewAngle() const;
 
   //################################################################################################
   void setVariableViewAngle(bool variableViewAngle);
 
   //################################################################################################
-  bool allowTranslation()const;
+  bool allowTranslation() const;
 
   //################################################################################################
   void setAllowTranslation(bool allowTranslation);
 
   //################################################################################################
-  bool allowZoom()const;
+  bool allowZoom() const;
 
   //################################################################################################
   void setAllowZoom(bool allowZoom);
 
   //################################################################################################
   //! Rotation in degrees
-  float rotationAngle()const;
+  float rotationAngle() const;
 
   //################################################################################################
   void setRotationAngle(float rotationAngle);
 
-  //##################################################################################################
-  float rotationFactor()const;
+  //################################################################################################
+  //! Rotation in degrees
+  float viewAngle() const;
 
-  //##################################################################################################
+  //################################################################################################
+  void setViewAngle(float viewAngle);
+
+  //################################################################################################
+  float rotationFactor() const;
+
+  //################################################################################################
   void setRotationFactor(float rotationFactor);
 
   //################################################################################################
-  nlohmann::json saveState()const override;
+  void assignMouseButtons(Button rotateButton, Button translateButton);
 
   //################################################################################################
-  void loadState(const nlohmann::json& j)override;
+  nlohmann::json saveState() const override;
+
+  //################################################################################################
+  void loadState(const nlohmann::json& j) override;
 
 protected:
   //################################################################################################
-  ~FlatController()override;
+  ~FlatController() override;
 
   //################################################################################################
-   void mapResized(int w, int h)override;
+   void mapResized(int w, int h) override;
 
   //################################################################################################
-  void updateMatrices()override;
+  void updateMatrices() override;
 
   //################################################################################################
-  bool mouseEvent(const MouseEvent& event)override;
+  bool mouseEvent(const MouseEvent& event) override;
 
   //################################################################################################
   virtual void translate(float dx, float dy, double msSincePrevious);

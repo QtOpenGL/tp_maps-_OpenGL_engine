@@ -10,121 +10,44 @@ namespace tp_maps
 {
 
 //##################################################################################################
-TextureData TextureData::clone()const
-{
-  TextureData clone;
-  clone.w = w;
-  clone.h = h;
-  int size = w*h;
-  if(size>0)
-  {
-    clone.data = new Pixel[size];
-    memcpy(clone.data, data, size*sizeof(Pixel));
-  }
-  return clone;
-}
-
-//##################################################################################################
-TextureData TextureData::clone2()const
-{
-  auto po2 = [](uint32_t v)
-  {
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-    return v;
-  };
-
-  TextureData clone;
-
-  if(w<1||h<1)
-  {
-    clone.w = w;
-    clone.h = h;
-    return clone;
-  }
-
-  clone.w = tpMax(po2(w), po2(h));
-  clone.h = clone.w;
-
-  clone.fw = float(w) / float(clone.w);
-  clone.fh = float(h) / float(clone.h);
-
-  int size = clone.w*clone.h;
-
-  clone.data = new Pixel[size];
-  if(clone.w==w && clone.h==h)
-  {
-    memcpy(clone.data, data, size*sizeof(Pixel));
-  }
-  else
-  {
-    //size_t padX = (clone.w - w);//*sizeof(Pixel);
-    size_t srcW = w*sizeof(Pixel);
-    for(int y=0; y<h; y++)
-    {
-      Pixel* dst = clone.data+(y*clone.w);
-      memcpy(dst, data+(y*w), srcW);
-
-      {
-        Pixel* d=dst+w;
-        Pixel  p = *(d-1);
-        Pixel* dMax=dst+clone.w;
-        for(; d<dMax; d++)
-          (*d) = p;
-      }
-    }
-
-    {
-      size_t dstW = clone.w*sizeof(Pixel);
-      void* src = clone.data+(clone.w*(h-1));
-      for(int y=h; y<clone.h; y++)
-        memcpy(clone.data+(clone.w*y), src, dstW);
-    }
-  }
-
-  return clone;
-}
-
-//##################################################################################################
-void TextureData::destroy()
-{
-  delete[] data;
-}
-
-//##################################################################################################
 struct BasicTexture::Private
 {
-  TextureData image;
+  TP_REF_COUNT_OBJECTS("tp_maps::BasicTexture::Private");
+  TP_NONCOPYABLE(Private);
+  Private() = default;
+
+  tp_image_utils::ColorMap image;
   bool imageReady{false};
+  bool makeSquare{true};
 };
 
 //##################################################################################################
-BasicTexture::BasicTexture(Map* map, const TextureData& image):
+BasicTexture::BasicTexture(Map* map, const tp_image_utils::ColorMap& image, bool makeSquare):
   Texture(map),
   d(new Private())
 {
+  d->makeSquare = makeSquare;
   setImage(image);
 }
 
 //##################################################################################################
 BasicTexture::~BasicTexture()
 {
-  d->image.destroy();
   delete d;
 }
 
 //##################################################################################################
-void BasicTexture::setImage(const TextureData& image)
+void BasicTexture::setImage(const tp_image_utils::ColorMap& image, bool quiet)
 {
-  d->image.destroy();
-  d->image = image.clone2();
-  d->imageReady = (d->image.data && d->image.w>0 && d->image.h>0);
-  imageChanged();
+  if(d->makeSquare)
+    image.clone2IntoOther(d->image);
+  else
+    d->image = image;
+
+  d->imageReady = (d->image.constData() && d->image.width()>0 && d->image.height()>0);
+
+  if(!quiet)
+    imageChanged();
 }
 
 //##################################################################################################
@@ -143,16 +66,21 @@ GLuint BasicTexture::bindTexture()
                                GL_TEXTURE_2D,
                                GL_RGBA,
                                magFilterOption(),
-                               minFilterOption());
+                               minFilterOption(),
+                               textureWrapS(),
+                               textureWrapT());
+
   return texture;
 }
 
 //##################################################################################################
-GLuint BasicTexture::bindTexture(const TextureData& img,
-                                 GLenum target,
-                                 GLint format,
-                                 GLuint magFilterOption,
-                                 GLuint minFilterOption)
+GLuint BasicTexture::bindTexture(const tp_image_utils::ColorMap& img,
+                                 TPGLenum target,
+                                 TPGLenum format,
+                                 GLint magFilterOption,
+                                 GLint minFilterOption,
+                                 GLint textureWrapS,
+                                 GLint textureWrapT)
 {
   if(!map()->initialized())
   {
@@ -161,7 +89,7 @@ GLuint BasicTexture::bindTexture(const TextureData& img,
     return 0;
   }
 
-  if(img.w<1 || img.h<1 || !img.data)
+  if(img.width()<1 || img.height()<1 || !img.constData())
   {
     tpWarning() << "BasicTexture::bindTexture() called with null image";
     tp_utils::printStackTrace();
@@ -172,29 +100,37 @@ GLuint BasicTexture::bindTexture(const TextureData& img,
   glGenTextures(1, &txId);
   glBindTexture(target, txId);
 
-  glTexImage2D(target, 0, format, img.w, img.w, 0, format, GL_UNSIGNED_BYTE, img.data);
+  glTexImage2D(target, 0, format, int(img.width()), int(img.height()), 0, format, GL_UNSIGNED_BYTE, img.constData());
 
   if((minFilterOption == GL_NEAREST_MIPMAP_NEAREST) || (minFilterOption == GL_LINEAR_MIPMAP_LINEAR))
     glGenerateMipmap(target);
 
   glTexParameteri(target, GL_TEXTURE_MAG_FILTER, magFilterOption);
   glTexParameteri(target, GL_TEXTURE_MIN_FILTER, minFilterOption);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, textureWrapS);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, textureWrapT);
+
+#ifdef TP_LINUX
+  {
+    float maxAnisotropy;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAnisotropy);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, maxAnisotropy);
+  }
+#endif
 
   return txId;
 }
 
 //##################################################################################################
-glm::vec2 BasicTexture::textureDims()const
+glm::vec2 BasicTexture::textureDims() const
 {
-  return {d->image.fw, d->image.fh};
+  return {d->image.fw(), d->image.fh()};
 }
 
 //##################################################################################################
-glm::vec2 BasicTexture::imageDims()const
+glm::vec2 BasicTexture::imageDims() const
 {
-  return {d->image.w*d->image.fw, d->image.h*d->image.fh};
+  return {float(d->image.width())*d->image.fw(), float(d->image.height())*d->image.fh()};
 }
 
 }

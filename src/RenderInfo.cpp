@@ -28,8 +28,23 @@ glm::vec4 RenderInfo::pickingIDMat(const PickingDetails& details)
 void RenderInfo::resetPicking()
 {
   pickingDetails.clear();
-  pickingDetails.push_back(PickingDetails());
+  pickingDetails.emplace_back();
   nextID = 1;
+}
+
+//##################################################################################################
+ShaderType RenderInfo::shaderType() const
+{
+  if(pass == RenderPass::LightFBOs)
+    return ShaderType::Light;
+
+  if(pass == RenderPass::Picking)
+    return ShaderType::Picking;
+
+  if(extendedFBO == ExtendedFBO::Yes)
+    return ShaderType::RenderExtendedFBO;
+
+  return ShaderType::Render;
 }
 
 }

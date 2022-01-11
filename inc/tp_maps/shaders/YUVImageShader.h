@@ -12,10 +12,9 @@ namespace tp_maps
 //! A shader for rendering YUV image data.
 class TP_MAPS_SHARED_EXPORT YUVImageShader: public ImageShader
 {
-  friend class Map;
 public:
   //################################################################################################
-  YUVImageShader();
+  YUVImageShader(Map* map, tp_maps::OpenGLProfile openGLProfile);
 
   //################################################################################################
   static inline const tp_utils::StringID& name(){return yuvImageShaderSID();}

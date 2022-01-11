@@ -14,6 +14,9 @@ namespace tp_maps
 //##################################################################################################
 struct FlatController::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::FlatController::Private");
+  TP_NONCOPYABLE(Private);
+
   FlatController* q;
 
   float distance{10.0f};
@@ -35,6 +38,10 @@ struct FlatController::Private
   glm::ivec2 previousPos{0,0};
   glm::ivec2 previousPos2{0,0};
   Button mouseInteraction{Button::NoButton};
+
+  Button rotateButton{Button::RightButton};
+  Button translateButton{Button::LeftButton};
+
   bool mouseMoved{false};
 
   //################################################################################################
@@ -52,8 +59,8 @@ struct FlatController::Private
     float sa = std::sin(radians);
 
     //The width and height of the map widget
-    float width(q->map()->width());
-    float height(q->map()->height());
+    float width  = float(q->map()->width());
+    float height = float(q->map()->height());
 
     dx = dx / width;
     dy = dy / height;
@@ -86,7 +93,7 @@ FlatController::FlatController(Map* map):
 }
 
 //##################################################################################################
-glm::vec3 FlatController::focalPoint()const
+glm::vec3 FlatController::focalPoint() const
 {
   return d->focalPoint;
 }
@@ -95,11 +102,11 @@ glm::vec3 FlatController::focalPoint()const
 void FlatController::setFocalPoint(const glm::vec3& focalPoint)
 {
   d->focalPoint = focalPoint;
-  map()->update();
+  update();
 }
 
 //##################################################################################################
-float FlatController::distance()const
+float FlatController::distance() const
 {
   return d->distance;
 }
@@ -108,11 +115,11 @@ float FlatController::distance()const
 void FlatController::setDistance(float distance)
 {
   d->distance = distance;
-  map()->update();
+  update();
 }
 
 //##################################################################################################
-bool FlatController::allowRotation()const
+bool FlatController::allowRotation() const
 {
   return d->allowRotation;
 }
@@ -124,7 +131,7 @@ void FlatController::setAllowRotation(bool allowRotation)
 }
 
 //##################################################################################################
-bool FlatController::variableViewAngle()const
+bool FlatController::variableViewAngle() const
 {
   return d->variableViewAngle;
 }
@@ -136,7 +143,7 @@ void FlatController::setVariableViewAngle(bool variableViewAngle)
 }
 
 //##################################################################################################
-bool FlatController::allowTranslation()const
+bool FlatController::allowTranslation() const
 {
   return d->allowTranslation;
 }
@@ -148,7 +155,7 @@ void FlatController::setAllowTranslation(bool allowTranslation)
 }
 
 //##################################################################################################
-bool FlatController::allowZoom()const
+bool FlatController::allowZoom() const
 {
   return d->allowZoom;
 }
@@ -160,7 +167,7 @@ void FlatController::setAllowZoom(bool allowZoom)
 }
 
 //################################################################################################
-float FlatController::rotationAngle()const
+float FlatController::rotationAngle() const
 {
   return d->rotationAngle;
 }
@@ -169,11 +176,24 @@ float FlatController::rotationAngle()const
 void FlatController::setRotationAngle(float rotationAngle)
 {
   d->rotationAngle = rotationAngle;
-  map()->update();
+  update();
+}
+
+//################################################################################################
+float FlatController::viewAngle() const
+{
+  return d->viewAngle;
+}
+
+//################################################################################################
+void FlatController::setViewAngle(float viewAngle)
+{
+  d->viewAngle = viewAngle;
+  update();
 }
 
 //##################################################################################################
-float FlatController::rotationFactor()const
+float FlatController::rotationFactor() const
 {
   return d->rotationFactor;
 }
@@ -185,7 +205,14 @@ void FlatController::setRotationFactor(float rotationFactor)
 }
 
 //##################################################################################################
-nlohmann::json FlatController::saveState()const
+void FlatController::assignMouseButtons(Button rotateButton, Button translateButton)
+{
+  d->rotateButton = rotateButton;
+  d->translateButton = translateButton;
+}
+
+//##################################################################################################
+nlohmann::json FlatController::saveState() const
 {
   nlohmann::json j;
 
@@ -200,12 +227,12 @@ nlohmann::json FlatController::saveState()const
 //##################################################################################################
 void FlatController::loadState(const nlohmann::json& j)
 {
-  d->viewAngle     = tp_utils::getJSONValue<float>(j, "View angle"    , d->viewAngle    );
-  d->rotationAngle = tp_utils::getJSONValue<float>(j, "Rotation angle", d->rotationAngle);
-  d->focalPoint    = tp_math_utils::getJSONVec3   (j, "Focal point"   , d->focalPoint   );
-  d->distance      = tp_utils::getJSONValue<float>(j, "Distance"      , d->distance     );
+  d->viewAngle     = TPJSONFloat               (j, "View angle"    , d->viewAngle    );
+  d->rotationAngle = TPJSONFloat               (j, "Rotation angle", d->rotationAngle);
+  d->focalPoint    = tp_math_utils::getJSONVec3(j, "Focal point"   , d->focalPoint   );
+  d->distance      = TPJSONFloat               (j, "Distance"      , d->distance     );
 
-  map()->update();
+  update();
 }
 
 //##################################################################################################
@@ -228,8 +255,8 @@ void FlatController::updateMatrices()
     d->distance = 1.0f;
 
   //The width and height of the map widget
-  float width(map()->width());
-  float height(map()->height());
+  float width  = float(map()->width());
+  float height = float(map()->height());
 
   float fh = 1.0f;
   float fw = 1.0f;
@@ -249,8 +276,19 @@ void FlatController::updateMatrices()
                                     fh*d->distance,      // <- Top
                                     -100.0f*d->distance, // <- Near
                                     100.0f*d->distance); // <- Far
-
-  setMatrix(defaultSID(), projection * view);
+  Matrices vp;
+  vp.p  = projection;
+  vp.v  = view;
+  vp.vp = projection * view;
+  {
+    glm::vec4 origin = glm::inverse(vp.vp) * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    vp.cameraOriginNear = origin / origin.w;
+  }
+  {
+    glm::vec4 origin = glm::inverse(vp.vp) * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+    vp.cameraOriginFar = origin / origin.w;
+  }
+  setMatrices(defaultSID(), vp);
 }
 
 //##################################################################################################
@@ -285,13 +323,13 @@ bool FlatController::mouseEvent(const MouseEvent& event)
       d->mouseMoved = true;
     }
 
-    float dx = pos.x - d->previousPos.x;
-    float dy = pos.y - d->previousPos.y;
+    float dx = float(pos.x - d->previousPos.x);
+    float dy = float(pos.y - d->previousPos.y);
 
     d->previousPos2 = d->previousPos;
     d->previousPos = pos;
 
-    if(d->mouseInteraction == Button::RightButton)
+    if(d->mouseInteraction == d->rotateButton)
     {
       if(d->variableViewAngle)
       {
@@ -313,12 +351,12 @@ bool FlatController::mouseEvent(const MouseEvent& event)
         if(d->rotationAngle>360)
           d->rotationAngle-=360;
       }
-      map()->update();
+      update();
     }
-    else if(d->mouseInteraction == Button::LeftButton && d->allowTranslation)
+    else if(d->mouseInteraction == d->translateButton && d->allowTranslation)
     {
       translate(dx, dy, 1);
-      map()->update();
+      update();
     }
 
     break;
@@ -338,7 +376,7 @@ bool FlatController::mouseEvent(const MouseEvent& event)
         {
           MouseEvent e = event;
           e.type = MouseEventType::Click;
-          callMouseClickCallback(e);
+          mouseClicked(e);
         }
       }
       else if(event.button == Button::LeftButton)
@@ -375,7 +413,7 @@ bool FlatController::mouseEvent(const MouseEvent& event)
         d->focalPoint += scenePointA - scenePointB;
     }
 
-    map()->update();
+    update();
     break;
   }
 

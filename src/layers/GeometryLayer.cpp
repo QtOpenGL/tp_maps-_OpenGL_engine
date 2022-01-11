@@ -19,17 +19,18 @@ namespace
 struct GeometryDetails_lt
 {
   std::vector<std::pair<GLenum, MaterialShader::VertexBuffer*>> vertexBuffers;
-  MaterialShader::Material material;
+  tp_math_utils::Material material;
 };
 }
 //##################################################################################################
 struct GeometryLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::Geometry3DLayer::Private");
   TP_NONCOPYABLE(Private);
+
   GeometryLayer* q;
 
-  std::vector<Geometry> geometry;
-  MaterialShader::Light light;
+  std::vector<tp_math_utils::Geometry> geometry;
 
   //Processed geometry ready for rendering
   std::vector<GeometryDetails_lt> processedGeometry;
@@ -73,13 +74,13 @@ GeometryLayer::~GeometryLayer()
 }
 
 //##################################################################################################
-const std::vector<Geometry>& GeometryLayer::geometry()const
+const std::vector<tp_math_utils::Geometry>& GeometryLayer::geometry() const
 {
   return d->geometry;
 }
 
 //##################################################################################################
-void GeometryLayer::setGeometry(const std::vector<Geometry>& geometry)
+void GeometryLayer::setGeometry(const std::vector<tp_math_utils::Geometry>& geometry)
 {
   d->geometry = geometry;
   d->updateVertexBuffer = true;
@@ -87,16 +88,11 @@ void GeometryLayer::setGeometry(const std::vector<Geometry>& geometry)
 }
 
 //##################################################################################################
-void GeometryLayer::setLight(const MaterialShader::Light& light)
-{
-  d->light = light;
-  update();
-}
-
-//##################################################################################################
 void GeometryLayer::render(RenderInfo& renderInfo)
 {
-  if(renderInfo.pass != NormalRenderPass && renderInfo.pass != PickingRenderPass)
+  if(renderInfo.pass != defaultRenderPass() &&
+     renderInfo.pass != RenderPass::Transparency &&
+     renderInfo.pass != RenderPass::Picking)
     return;
 
   auto shader = map()->getShader<MaterialShader>();
@@ -108,7 +104,7 @@ void GeometryLayer::render(RenderInfo& renderInfo)
     d->deleteVertexBuffers();
     d->updateVertexBuffer=false;
 
-    for(const Geometry& shape : d->geometry)
+    for(const auto& shape : d->geometry)
     {
       GeometryDetails_lt details;
       details.material = shape.material;
@@ -127,13 +123,15 @@ void GeometryLayer::render(RenderInfo& renderInfo)
       {
         for(const tp_triangulation::Contour& c : i.second)
         {
-          std::vector<GLushort> indexes;
+          std::vector<GLuint> indexes;
           std::vector<MaterialShader::Vertex> verts;
+          verts.reserve(c.vertices.size());
           for(size_t n=0; n<c.vertices.size(); n++)
           {
-            const glm::vec3& v = c.vertices.at(n);
-            indexes.push_back(GLushort(n));
-            verts.push_back(MaterialShader::Vertex(v, {0.0f, 0.0f, 1.0f}));
+            const auto& v = c.vertices.at(n);
+            indexes.push_back(GLuint(n));            
+            glm::vec4 vv = shape.transform * glm::vec4(v.x, v.y, 0.0f, 1.0f);
+            verts.push_back(Geometry3DShader::Vertex(glm::vec3(vv) / vv.w, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}));
           }
 
           std::pair<GLenum, MaterialShader::VertexBuffer*> p;
@@ -147,19 +145,24 @@ void GeometryLayer::render(RenderInfo& renderInfo)
     }
   }
 
-  shader->use();
-  shader->setMatrix(map()->controller()->matrix(coordinateSystem()));
-  shader->setLight(d->light);
+  shader->use(renderInfo.shaderType());
 
-  if(renderInfo.pass==PickingRenderPass)
+  {
+    auto m = map()->controller()->matrices(coordinateSystem());
+    shader->setMatrix(modelToWorldMatrix(), m.v, m.p);
+  }
+  shader->setLights(map()->lights(), map()->lightBuffers());
+  shader->setLightOffsets(map()->renderedLightLevels());
+
+  if(renderInfo.pass==RenderPass::Picking)
   {
     size_t iMax = d->processedGeometry.size();
     for(size_t i=0; i<iMax; i++)
     {
       const GeometryDetails_lt& details = d->processedGeometry.at(i);
-      auto pickingID = renderInfo.pickingIDMat(PickingDetails(i, [](const PickingResult& r)
+      auto pickingID = renderInfo.pickingIDMat(PickingDetails(i, [&](const PickingResult& r)
       {
-        return new GeometryPickingResult(r.pickingType, r.details, r.renderInfo);
+        return new GeometryPickingResult(r.pickingType, r.details, r.renderInfo, this);
       }));
       for(const std::pair<GLenum, MaterialShader::VertexBuffer*>& buff : details.vertexBuffers)
         shader->drawPicking(buff.first, buff.second, pickingID);
@@ -170,6 +173,8 @@ void GeometryLayer::render(RenderInfo& renderInfo)
     for(const auto& details : d->processedGeometry)
     {
       shader->setMaterial(details.material);
+      shader->setBlankTextures();
+      shader->setDiscardOpacity((renderInfo.pass == RenderPass::Transparency)?0.01f:0.80f);
       for(const std::pair<GLenum, MaterialShader::VertexBuffer*>& buff : details.vertexBuffers)
         shader->draw(buff.first, buff.second);
     }
@@ -181,6 +186,7 @@ void GeometryLayer::invalidateBuffers()
 {
   d->deleteVertexBuffers();
   d->updateVertexBuffer=true;
+  Layer::invalidateBuffers();
 }
 
 }

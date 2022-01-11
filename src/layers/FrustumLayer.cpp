@@ -1,5 +1,6 @@
 #include "tp_maps/layers/FrustumLayer.h"
 #include "tp_maps/shaders/LineShader.h"
+#include "tp_maps/picking_results/LinesPickingResult.h"
 #include "tp_maps/Map.h"
 #include "tp_maps/RenderInfo.h"
 #include "tp_maps/Controller.h"
@@ -15,20 +16,27 @@ struct LinesDetails_lt
   LineShader::VertexBuffer* vertexBuffer{nullptr};
   glm::vec4 color{0.0f, 0.0f, 0.0f, 1.0f};
 };
+
+struct MatrixDetails_lt
+{
+  glm::mat4 cameraMatrix{glm::mat4(1)};
+  glm::mat4 inverseCameraMatrix{glm::mat4(1)};
+};
 }
 
 //##################################################################################################
 struct FrustumLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::FrustumLayer::Private");
   TP_NONCOPYABLE(Private);
+
   FrustumLayer* q;
 
   //Processed geometry ready for rendering
   bool updateVertexBuffer{true};
   std::vector<LinesDetails_lt> processedGeometry;
 
-  glm::mat4 cameraMatrix{glm::mat4(1)};
-  glm::mat4 inverseCameraMatrix{glm::mat4(1)};
+  std::vector<MatrixDetails_lt> matrices;
 
   bool renderFrustumBorder{true};
   bool renderRays{false};
@@ -74,8 +82,21 @@ FrustumLayer::~FrustumLayer()
 //##################################################################################################
 void FrustumLayer::setCameraMatrix(const glm::mat4& matrix)
 {
-  d->cameraMatrix = matrix;
-  d->inverseCameraMatrix = glm::inverse(matrix);
+  setCameraMatrices({matrix});
+}
+
+//##################################################################################################
+void FrustumLayer::setCameraMatrices(const std::vector<glm::mat4>& matrices)
+{
+  d->matrices.resize(matrices.size());
+  for(size_t i=0; i<matrices.size(); i++)
+  {
+    const auto& m = matrices.at(i);
+    auto& details = d->matrices.at(i);
+    details.cameraMatrix = m;
+    details.inverseCameraMatrix = glm::inverse(m);
+  }
+
   d->updateVertexBuffer = true;
   update();
 }
@@ -139,7 +160,7 @@ void FrustumLayer::setRaysColor(const glm::vec4& raysColor)
 //##################################################################################################
 void FrustumLayer::render(RenderInfo& renderInfo)
 {
-  if(renderInfo.pass != NormalRenderPass)
+  if(renderInfo.pass != RenderPass::Normal && renderInfo.pass != RenderPass::Picking)
     return;
 
   auto shader = map()->getShader<LineShader>();
@@ -151,64 +172,71 @@ void FrustumLayer::render(RenderInfo& renderInfo)
     d->deleteVertexBuffers();
     d->updateVertexBuffer=false;
 
-    auto addLine = [this](std::vector<glm::vec3>& vertices, const glm::vec3& start, const glm::vec3& end)
+    for(const auto& details : d->matrices)
     {
-      auto addVert = [this, &vertices](const glm::vec3& vert)
+      auto addLine = [&details](std::vector<glm::vec3>& vertices, const glm::vec3& start, const glm::vec3& end)
       {
-        glm::vec4 tmp = glm::vec4(vert.x, vert.y, vert.z, 1.0f);
+        auto addVert = [&vertices, &details](const glm::vec3& vert)
+        {
+          glm::vec4 tmp = glm::vec4(vert.x, vert.y, vert.z, 1.0f);
 
-        glm::vec4 obj = d->inverseCameraMatrix * tmp;
-        obj /= obj.w;
-        vertices.emplace_back(obj);
+          glm::vec4 obj = details.inverseCameraMatrix * tmp;
+          obj /= obj.w;
+          vertices.emplace_back(obj);
+        };
+
+        addVert(start);
+        addVert(end);
       };
 
-      addVert(start);
-      addVert(end);
-    };
-
-    if(d->renderRays)
-    {
-      std::vector<glm::vec3> vertices;
-      for(float x=-1; x<=1.01f; x+=0.1f)
+      if(d->renderRays)
       {
-        for(float y=-1; y<=1.01f; y+=0.1f)
+        std::vector<glm::vec3> vertices;
+        float x=-1;
+        while(x<=1.01f)
         {
-          addLine(vertices, {x, y, 0.0f}, {x, y, 1.0f});
+          float y=-1;
+          while(y<=1.01f)
+          {
+            addLine(vertices, {x, y, 0.0f}, {x, y, 1.0f});
+            y+=0.1f;
+          }
+          x+=0.1f;
         }
+
+        LinesDetails_lt details;
+        details.vertexBuffer = shader->generateVertexBuffer(map(), vertices);
+        details.color = d->raysColor;
+        d->processedGeometry.push_back(details);
       }
 
-      LinesDetails_lt details;
-      details.vertexBuffer = shader->generateVertexBuffer(map(), vertices);
-      details.color = d->raysColor;
-      d->processedGeometry.push_back(details);
-    }
+      if(d->renderFrustumBorder)
+      {
+        std::vector<glm::vec3> vertices;
 
-    if(d->renderFrustumBorder)
-    {
-      std::vector<glm::vec3> vertices;
+        // Near quad
+        addLine(vertices, {-1.0f, -1.0f,-1.0f}, { 1.0f, -1.0f,-1.0f});
+        addLine(vertices, { 1.0f, -1.0f,-1.0f}, { 1.0f,  1.0f,-1.0f});
+        addLine(vertices, { 1.0f,  1.0f,-1.0f}, {-1.0f,  1.0f,-1.0f});
+        addLine(vertices, {-1.0f,  1.0f,-1.0f}, {-1.0f, -1.0f,-1.0f});
 
-      // Near quad
-      addLine(vertices, {-1.0f, -1.0f,-1.0f}, { 1.0f, -1.0f,-1.0f});
-      addLine(vertices, { 1.0f, -1.0f,-1.0f}, { 1.0f,  1.0f,-1.0f});
-      addLine(vertices, { 1.0f,  1.0f,-1.0f}, {-1.0f,  1.0f,-1.0f});
-      addLine(vertices, {-1.0f,  1.0f,-1.0f}, {-1.0f, -1.0f,-1.0f});
+        // Far quad
+        addLine(vertices, {-1.0f, -1.0f, 1.0f}, { 1.0f, -1.0f, 1.0f});
+        addLine(vertices, { 1.0f, -1.0f, 1.0f}, { 1.0f,  1.0f, 1.0f});
+        addLine(vertices, { 1.0f,  1.0f, 1.0f}, {-1.0f,  1.0f, 1.0f});
+        addLine(vertices, {-1.0f,  1.0f, 1.0f}, {-1.0f, -1.0f, 1.0f});
 
-      // Far quad
-      addLine(vertices, {-1.0f, -1.0f, 1.0f}, { 1.0f, -1.0f, 1.0f});
-      addLine(vertices, { 1.0f, -1.0f, 1.0f}, { 1.0f,  1.0f, 1.0f});
-      addLine(vertices, { 1.0f,  1.0f, 1.0f}, {-1.0f,  1.0f, 1.0f});
-      addLine(vertices, {-1.0f,  1.0f, 1.0f}, {-1.0f, -1.0f, 1.0f});
+        // Corner lines
+        addLine(vertices, {-1.0f, -1.0f,-1.0f}, {-1.0f, -1.0f, 1.0f});
+        addLine(vertices, { 1.0f, -1.0f,-1.0f}, { 1.0f, -1.0f, 1.0f});
+        addLine(vertices, { 1.0f,  1.0f,-1.0f}, { 1.0f,  1.0f, 1.0f});
+        addLine(vertices, {-1.0f,  1.0f,-1.0f}, {-1.0f,  1.0f, 1.0f});
 
-      // Corner lines
-      addLine(vertices, {-1.0f, -1.0f,-1.0f}, {-1.0f, -1.0f, 1.0f});
-      addLine(vertices, { 1.0f, -1.0f,-1.0f}, { 1.0f, -1.0f, 1.0f});
-      addLine(vertices, { 1.0f,  1.0f,-1.0f}, { 1.0f,  1.0f, 1.0f});
-      addLine(vertices, {-1.0f,  1.0f,-1.0f}, {-1.0f,  1.0f, 1.0f});
-
-      LinesDetails_lt details;
-      details.vertexBuffer = shader->generateVertexBuffer(map(), vertices);
-      details.color = d->frustumBorderColor;
-      d->processedGeometry.push_back(details);
+        LinesDetails_lt details;
+        details.vertexBuffer = shader->generateVertexBuffer(map(), vertices);
+        details.color = d->frustumBorderColor;
+        d->processedGeometry.push_back(details);
+      }
     }
   }
 
@@ -216,10 +244,28 @@ void FrustumLayer::render(RenderInfo& renderInfo)
   shader->setMatrix(map()->controller()->matrix(coordinateSystem()));
   shader->setLineWidth(1.0f);
 
-  for(const LinesDetails_lt& line : d->processedGeometry)
+  if(renderInfo.pass==RenderPass::Picking)
   {
-    shader->setColor(line.color);
-    shader->drawLines(GL_LINES, line.vertexBuffer);
+    size_t i=0;
+    for(const LinesDetails_lt& line : d->processedGeometry)
+    {
+      auto pickingID = renderInfo.pickingIDMat(PickingDetails(0, [&, i](const PickingResult& r) -> PickingResult*
+      {
+        return new LinesPickingResult(r.pickingType, r.details, r.renderInfo, this, i);
+      }));
+
+      shader->setColor(pickingID);
+      shader->drawLines(GL_LINES, line.vertexBuffer);
+      i++;
+    }
+  }
+  else
+  {
+    for(const LinesDetails_lt& line : d->processedGeometry)
+    {
+      shader->setColor(line.color);
+      shader->drawLines(GL_LINES, line.vertexBuffer);
+    }
   }
 }
 
@@ -228,6 +274,7 @@ void FrustumLayer::invalidateBuffers()
 {
   d->deleteVertexBuffers();
   d->updateVertexBuffer=true;
+  Layer::invalidateBuffers();
 }
 
 }

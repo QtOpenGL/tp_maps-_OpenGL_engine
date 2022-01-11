@@ -11,6 +11,9 @@ namespace tp_maps
 //##################################################################################################
 struct PlaneLayer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::PlaneLayer::Private");
+  TP_NONCOPYABLE(Private);
+
   PlaneLayer* q;
   tp_math_utils::Plane plane;
   glm::vec4 color{1.0f, 0.0f, 0.0f, 1.0f};
@@ -46,7 +49,7 @@ struct PlaneLayer::Private
     };
 
     int size=10;
-    float sizeF = float(size);
+    auto sizeF = float(size);
 
     //The center cross
     addLine({0.0f, -sizeF, 0.0f}, {0.0f, sizeF, 0.0f});
@@ -80,7 +83,7 @@ PlaneLayer::~PlaneLayer()
 }
 
 //##################################################################################################
-const tp_math_utils::Plane& PlaneLayer::plane()const
+const tp_math_utils::Plane& PlaneLayer::plane() const
 {
   return d->plane;
 }
@@ -93,7 +96,7 @@ void PlaneLayer::setPlane(const tp_math_utils::Plane& plane)
 }
 
 //##################################################################################################
-const glm::vec4& PlaneLayer::color()const
+const glm::vec4& PlaneLayer::color() const
 {
   return d->color;
 }

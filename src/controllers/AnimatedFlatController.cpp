@@ -15,6 +15,9 @@ namespace tp_maps
 //##################################################################################################
 struct AnimatedFlatController::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::AnimatedFlatController::Private");
+  TP_NONCOPYABLE(Private);
+
   AnimatedFlatController* q;
 
   float distance{10.0f};
@@ -121,7 +124,7 @@ void AnimatedFlatController::animate(double timestampMS)
 
   d->updateInertia();
 
-  float f = ((timestampMS - d->timestampMS)/1000.0);
+  float f = float((timestampMS - d->timestampMS)/1000.0);
 
   glm::vec3 focalPointD    = (d->focalPoint    - focalPoint()   );
   float     distanceD      = (d->distance      - distance()     );

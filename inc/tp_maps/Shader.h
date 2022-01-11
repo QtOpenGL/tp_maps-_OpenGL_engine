@@ -3,26 +3,19 @@
 
 #include "tp_maps/Globals.h"
 
-#include "lib_platform/Polyfill.h"
-
 #include <functional>
-
-namespace tp_maps
-{
-enum class ShaderType
-{
-  Render,
-  Picking
-};
-
-}
-
-TP_ENUM_HASH(tp_maps::ShaderType)
 
 namespace tp_maps
 {
 class Map;
 class ShaderPointer;
+
+struct ShaderDetails
+{
+  GLuint vertexShader{0};
+  GLuint fragmentShader{0};
+  GLuint program{0};
+};
 
 //##################################################################################################
 //! The base class for shaders.
@@ -31,13 +24,20 @@ This allows the map to cache shaders.
 */
 class TP_MAPS_SHARED_EXPORT Shader
 {
+  TP_NONCOPYABLE(Shader);
   friend class Map;
 public:
   //################################################################################################
-  Shader();
+  Shader(Map* map, tp_maps::OpenGLProfile openGLProfile);
 
   //################################################################################################
   virtual ~Shader();
+
+  //################################################################################################
+  Map* map() const;
+
+  //################################################################################################
+  tp_maps::OpenGLProfile openGLProfile() const;
 
   //################################################################################################
   void compile(const char* vertexShaderStr,
@@ -50,14 +50,20 @@ public:
   virtual void use(ShaderType shaderType = ShaderType::Render);
 
   //################################################################################################
+  ShaderType currentShaderType() const;
+
+  //################################################################################################
   GLuint loadShader(const char* shaderSrc, GLenum type);
 
   //################################################################################################
-  bool error()const;
+  bool error() const;
 
-private:
   //################################################################################################
-  void invalidate();
+  ShaderDetails shaderDetails(ShaderType shaderType) const;
+
+protected:
+  //################################################################################################
+  virtual void invalidate();
 
 private:
   struct Private;
@@ -70,6 +76,7 @@ private:
 //##################################################################################################
 class ShaderPointer
 {
+  TP_NONCOPYABLE(ShaderPointer);
   friend class Shader;
   const Shader* m_shader;
 public:

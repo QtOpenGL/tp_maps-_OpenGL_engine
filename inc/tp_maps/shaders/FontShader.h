@@ -10,16 +10,12 @@ namespace tp_maps
 {
 
 //##################################################################################################
-//! The base class for shaders.
-/*!
-This allows the map to cache shaders.
-*/
+//! A shader for rendering fonts.
 class TP_MAPS_SHARED_EXPORT FontShader: public Shader
 {
-  friend class Map;
 public:
   //################################################################################################
-  FontShader(const char* vertexShader=nullptr, const char* fragmentShader=nullptr);
+  FontShader(Map* map, tp_maps::OpenGLProfile openGLProfile, const char* vertexShader=nullptr, const char* fragmentShader=nullptr);
 
   //################################################################################################
   ~FontShader() override;
@@ -30,7 +26,10 @@ public:
 
   //################################################################################################
   //! Call this to set the camera matrix before drawing the image
-  void setMatrix(const glm::mat4& matrix);
+  void setMatrix(const glm::mat4& matrix);  
+
+  //################################################################################################
+  void setColor(const glm::vec4& color);
 
   //################################################################################################
   //! Set the texture that will be draw, this needs to be done each frame before drawing
@@ -41,8 +40,7 @@ public:
   {
   public:
     //##############################################################################################
-    PreparedString(const Shader *shader,
-                   FontRenderer* fontRenderer,
+    PreparedString(FontRenderer* fontRenderer,
                    const std::u16string& text,
                    const PreparedStringConfig& config=PreparedStringConfig());
 

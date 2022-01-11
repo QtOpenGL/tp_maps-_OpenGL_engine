@@ -10,85 +10,31 @@ namespace tp_maps
 
 namespace
 {
-const char* renderVertexShaderStr =
-    TP_VERT_SHADER_HEADER
-    "//PointSpriteShader renderVertexShaderStr\n"
-    TP_GLSL_IN_V"vec4 inColor;\n"
-    TP_GLSL_IN_V"vec3 inPosition;\n"
-    TP_GLSL_IN_V"vec3 inOffset;\n"
-    TP_GLSL_IN_V"vec2 inTexture;\n"
-    "uniform mat4 matrix;\n"
-    "uniform vec2 scaleFactor;\n"
-    TP_GLSL_OUT_V"vec2 texCoordinate;\n"
-    TP_GLSL_OUT_V"vec4 color;\n"
-    TP_GLSL_OUT_V"float clip;\n"
-    "void main()\n"
-    "{\n"
-    "  gl_Position = (matrix * vec4(inPosition, 1.0));\n"
-    "  clip = (gl_Position.z<-0.9999)?0.0:1.0;\n"
-    "  gl_Position += vec4((inOffset.x*scaleFactor.x)*gl_Position.w, (inOffset.y*scaleFactor.y)*gl_Position.w, 0.0, 0.0);\n"
-    "  texCoordinate = inTexture;\n"
-    "  color = inColor;\n"
-    "}\n";
+ShaderResource& vertShaderStr(){static ShaderResource s{"/tp_maps/PointSpriteShader.vert"}; return s;}
+ShaderResource& fragShaderStr(){static ShaderResource s{"/tp_maps/PointSpriteShader.frag"}; return s;}
 
-const char* renderFragmentShaderStr =
-    TP_FRAG_SHADER_HEADER
-    "//PointSpriteShader renderFragmentShaderStr\n"
-    "uniform sampler2D textureSampler;\n"
-    TP_GLSL_IN_F"vec2 texCoordinate;\n"
-    TP_GLSL_IN_F"vec4 color;\n"
-    TP_GLSL_IN_F"float clip;\n"
-    TP_GLSL_GLFRAGCOLOR_DEF
-    "void main()\n"
-    "{\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = " TP_GLSL_TEXTURE "(textureSampler, texCoordinate) * color;\n"
-    "  if(" TP_GLSL_GLFRAGCOLOR ".a < 0.001 || clip<0.1)\n"
-    "    discard;\n"
-    "}\n";
-#ifdef TP_GLSL_PICKING
-const char* pickingVertexShaderStr =
-    TP_VERT_SHADER_HEADER
-    "//PointSpriteShader pickingVertexShaderStr\n"
-    TP_GLSL_IN_V"vec4 inColor;\n"
-    TP_GLSL_IN_V"vec3 inPosition;\n"
-    TP_GLSL_IN_V"vec3 inOffset;\n"
-    TP_GLSL_IN_V"vec2 inTexture;\n"
-    "uniform mat4 matrix;\n"
-    "uniform vec2 scaleFactor;\n"
-    "uniform uint pickingID;\n"
-    TP_GLSL_OUT_V"vec2 texCoordinate;\n"
-    TP_GLSL_OUT_V"vec4 picking;\n"
-    "void main()\n"
-    "{\n"
-    "  gl_Position = (matrix * vec4(inPosition, 1.0));\n"
-    "  gl_Position = vec4(gl_Position.xyz * (1.0/gl_Position.w), 1.0) + vec4(inOffset.x*scaleFactor.x, inOffset.y*scaleFactor.y, 0.0, 0.0);\n"
-    "  texCoordinate = inTexture;\n"
-    "  uint id = pickingID + (uint(gl_VertexID)/4u);\n"
-    "  uint r = (id & 0x000000FFu) >>  0u;\n"
-    "  uint g = (id & 0x0000FF00u) >>  8u;\n"
-    "  uint b = (id & 0x00FF0000u) >> 16u;\n"
-    "  picking = vec4(r,g,b,255.0)/255.0;\n"
-    "}\n";
-
-const char* pickingFragmentShaderStr =
-    TP_FRAG_SHADER_HEADER
-    "//PointSpriteShader pickingFragmentShaderStr\n"
-    "uniform sampler2D textureSampler;\n"
-    TP_GLSL_IN_F"vec2 texCoordinate;\n"
-    TP_GLSL_IN_F"vec4 picking;\n"
-    TP_GLSL_GLFRAGCOLOR_DEF
-    "void main()\n"
-    "{\n"
-    "  " TP_GLSL_GLFRAGCOLOR " = picking;\n"
-    "  if(" TP_GLSL_TEXTURE "(textureSampler, texCoordinate).a < 0.001)\n"
-    "    discard;\n"
-    "}\n";
+#ifdef TP_GLSL_PICKING_SUPPORTED
+ShaderResource& vertShaderStrPicking(){static ShaderResource s{"/tp_maps/PointSpriteShader.picking.vert"}; return s;}
+ShaderResource& fragShaderStrPicking(){static ShaderResource s{"/tp_maps/PointSpriteShader.picking.frag"}; return s;}
 #endif
+
+//There will be 4 of these generated for each PointSprite.
+struct PointSprite_lt
+{
+  glm::vec4 color{};    //The color to multiply the texture by.
+  glm::vec3 position{}; //The center coordinate of the point sprite.
+  glm::vec3 offset{};   //The offset of each corner in relation to the position.
+  glm::vec2 texture{};  //Texture coords for this corner.
+};
 }
 
 //##################################################################################################
 struct PointSpriteShader::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::PointSpriteShader::Private");
+  TP_NONCOPYABLE(Private);
+  Private() = default;
+
   GLint renderMatrixLoc{0};
   GLint renderScaleFactorLoc{0};
 
@@ -106,18 +52,23 @@ struct PointSpriteShader::Private
     if(vertexBuffer->indexCount<3)
       return;
 
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
     tpBindVertexArray(vertexBuffer->vaoID);
     tpDrawElements(GL_TRIANGLES,
                    vertexBuffer->indexCount,
                    GL_UNSIGNED_INT,
                    nullptr);
     tpBindVertexArray(0);
+#else
+    vertexBuffer->bindVBO();
+    glDrawArrays(GL_TRIANGLES, 0, vertexBuffer->indexCount);
+#endif
   }
 };
 
 //##################################################################################################
-PointSpriteShader::PointSpriteShader():
-  Shader(),
+PointSpriteShader::PointSpriteShader(Map* map, tp_maps::OpenGLProfile openGLProfile):
+  Shader(map, openGLProfile),
   d(new Private())
 {
   //We compile 2 shaders one for picking and the other for normal rendering
@@ -153,11 +104,11 @@ PointSpriteShader::PointSpriteShader():
     shaderType);
   };
 
-  compileShader( renderVertexShaderStr,  renderFragmentShaderStr,  "PointSpriteShader_render", ShaderType:: Render, d-> renderMatrixLoc, d-> renderScaleFactorLoc, nullptr);
-#ifdef TP_GLSL_PICKING
-  compileShader(pickingVertexShaderStr, pickingFragmentShaderStr, "PointSpriteShader_picking", ShaderType::Picking, d->pickingMatrixLoc, d->pickingScaleFactorLoc, &d->pickingIDLoc);
+  compileShader(vertShaderStr().data(openGLProfile, ShaderType::Render), fragShaderStr().data(openGLProfile, ShaderType::Render), "PointSpriteShader_render", ShaderType:: Render, d-> renderMatrixLoc, d-> renderScaleFactorLoc, nullptr);
+#ifdef TP_GLSL_PICKING_SUPPORTED
+  compileShader(vertShaderStrPicking().data(openGLProfile, ShaderType::Render), fragShaderStrPicking().data(openGLProfile, ShaderType::Render), "PointSpriteShader_picking", ShaderType::Picking, d->pickingMatrixLoc, d->pickingScaleFactorLoc, &d->pickingIDLoc);
 #else
-#  warning fix point sprite picking on this platform.
+  //Point sprite picking is not implemented on this platform.
 #endif
 }
 
@@ -174,7 +125,9 @@ void PointSpriteShader::use(ShaderType shaderType)
 
   switch(shaderType)
   {
-  case ShaderType::Render:
+  case ShaderType::Light: [[fallthrough]];
+  case ShaderType::Render: [[fallthrough]];
+  case ShaderType::RenderExtendedFBO:
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
@@ -184,7 +137,6 @@ void PointSpriteShader::use(ShaderType shaderType)
 
   case ShaderType::Picking:
     glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
     d->matrixLoc = d->pickingMatrixLoc;
     d->scaleFactorLoc = d->pickingScaleFactorLoc;
     break;
@@ -223,115 +175,138 @@ PointSpriteShader::VertexBuffer::VertexBuffer(Map* map_, const Shader *shader_):
 //##################################################################################################
 PointSpriteShader::VertexBuffer::~VertexBuffer()
 {  
-  if(!vaoID)
+  if(!shader.shader())
     return;
 
   map->makeCurrent();
-  tpDeleteVertexArrays(1, &vaoID);
-  glDeleteBuffers(1, &iboID);
-  glDeleteBuffers(1, &vboID);
+
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
+  if(vaoID)
+    tpDeleteVertexArrays(1, &vaoID);
+
+  if(iboID)
+    glDeleteBuffers(1, &iboID);
+#endif
+
+  if(vboID)
+    glDeleteBuffers(1, &vboID);
 }
 
 //##################################################################################################
-PointSpriteShader::VertexBuffer* PointSpriteShader::generateVertexBuffer(Map* map,
-                                                                         const std::vector<PointSpriteShader::PointSprite>& pointSptrites,
-                                                                         const std::vector<SpriteCoords>& coords)const
+void PointSpriteShader::VertexBuffer::bindVBO() const
 {
-  VertexBuffer* vertexBuffer = new VertexBuffer(map, this);
-
-  if(pointSptrites.empty())
-    return vertexBuffer;
-
-  //There will be 4 of these generated for each PointSprite.
-  struct PointSprite_lt
-  {
-    glm::vec4 color;    //The color to multiply th etexture by.
-    glm::vec3 position; //The center coordinate of the point sprite.
-    glm::vec3 offset;   //The offset of each corner in relation to the position.
-    glm::vec2 texture;  //Texture coords for this corner.
-  };
-
-  std::vector<GLuint> indexes;
-  std::vector<PointSprite_lt> verts;
-
-  const glm::vec3 offsets[4] =
-  {
-    {-1.0f,-1.0f,0.0f},
-    { 1.0f,-1.0f,0.0f},
-    { 1.0f, 1.0f,0.0f},
-    {-1.0f, 1.0f,0.0f}
-  };
-
-  const glm::vec2 textureCoords[4] =
-  {
-    {0.0f,0.0f},
-    {1.0f,0.0f},
-    {1.0f,1.0f},
-    {0.0f,1.0f}
-  };
-
-  {
-    const PointSpriteShader::PointSprite* p = pointSptrites.data();
-    const PointSpriteShader::PointSprite* pMax = p + pointSptrites.size();
-    for(; p<pMax; p++)
-    {
-      indexes.push_back(verts.size()+0);
-      indexes.push_back(verts.size()+1);
-      indexes.push_back(verts.size()+3);
-      indexes.push_back(verts.size()+1);
-      indexes.push_back(verts.size()+2);
-      indexes.push_back(verts.size()+3);
-
-      const auto& texCoords = (p->spriteIndex>=0 && p->spriteIndex<int(coords.size()))?coords.at(p->spriteIndex).coords:textureCoords;
-
-      for(int i=0; i<4; i++)
-      {
-        PointSprite_lt ps;
-        ps.color    = p->color;
-        ps.position = p->position;
-        ps.offset   =(p->offset+offsets[i])*p->radius;
-        ps.texture  = texCoords[i];
-        verts.push_back(ps);
-      }
-    }
-  }
-
-  vertexBuffer->vertexCount = verts.size();
-  vertexBuffer->indexCount  = indexes.size();
-
-  glGenBuffers(1, &vertexBuffer->iboID);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexes.size()*sizeof(GLuint), indexes.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-
-
-  glGenBuffers(1, &vertexBuffer->vboID);
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(PointSprite_lt), verts.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-  tpGenVertexArrays(1, &vertexBuffer->vaoID);
-  tpBindVertexArray(vertexBuffer->vaoID);
-
-  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
-  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), (void*)(0));                //vec4 color;
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), (void*)(sizeof(float)*4));  //vec3 position;
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), (void*)(sizeof(float)*7));  //vec3 offset;
-  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), (void*)(sizeof(float)*10)); //vec2 texture;
+  glBindBuffer(GL_ARRAY_BUFFER, vboID);
+  glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), tpVoidLiteral( 0)); //vec4 color;
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), tpVoidLiteral(16)); //vec3 position;
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), tpVoidLiteral(28)); //vec3 offset;
+  glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(PointSprite_lt), tpVoidLiteral(40)); //vec2 texture;
   glEnableVertexAttribArray(0);
   glEnableVertexAttribArray(1);
   glEnableVertexAttribArray(2);
   glEnableVertexAttribArray(3);
 
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, iboID);
+#endif
+}
 
+//##################################################################################################
+PointSpriteShader::VertexBuffer* PointSpriteShader::generateVertexBuffer(Map* map,
+                                                                         const std::vector<PointSpriteShader::PointSprite>& pointSptrites,
+                                                                         const std::vector<SpriteCoords>& coords) const
+{
+  auto* vertexBuffer = new VertexBuffer(map, this);
+
+  if(pointSptrites.empty())
+    return vertexBuffer;
+
+  std::vector<GLuint> indexes;
+  std::vector<PointSprite_lt> verts;
+
+  const std::array<glm::vec3, 4> offsets =
+  {
+    {
+      {-1.0f,-1.0f,0.0f},
+      { 1.0f,-1.0f,0.0f},
+      { 1.0f, 1.0f,0.0f},
+      {-1.0f, 1.0f,0.0f}
+    }
+  };
+
+  const std::array<glm::vec2, 4> textureCoords =
+  {
+    {
+      {0.0f,0.0f},
+      {1.0f,0.0f},
+      {1.0f,1.0f},
+      {0.0f,1.0f}
+    }
+  };
+
+  {
+    const PointSpriteShader::PointSprite* p = pointSptrites.data();
+    const PointSpriteShader::PointSprite* pMax = p + pointSptrites.size();
+    indexes.reserve(pointSptrites.size()*6);
+    for(; p<pMax; p++)
+    {
+      indexes.push_back(GLuint(verts.size()+0));
+      indexes.push_back(GLuint(verts.size()+1));
+      indexes.push_back(GLuint(verts.size()+3));
+      indexes.push_back(GLuint(verts.size()+1));
+      indexes.push_back(GLuint(verts.size()+2));
+      indexes.push_back(GLuint(verts.size()+3));
+
+      const auto& texCoords = (p->spriteIndex<coords.size())?coords.at(p->spriteIndex).coords:textureCoords;
+
+      for(size_t i=0; i<4; i++)
+      {
+        PointSprite_lt& ps = verts.emplace_back();
+        ps.color    = p->color;
+        ps.position = p->position;
+        ps.offset   = p->offset+offsets.at(i);
+        ps.offset.x *=p->radius;
+        ps.offset.y *=p->radius;
+        ps.texture  = texCoords.at(i);
+      }
+    }
+  }
+  vertexBuffer->indexCount  = GLuint(indexes.size());
+
+#ifdef TP_VERTEX_ARRAYS_SUPPORTED
+  vertexBuffer->vertexCount = GLuint(verts.size());
+
+  glGenBuffers(1, &vertexBuffer->iboID);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vertexBuffer->iboID);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, TPGLsizei(indexes.size()*sizeof(GLuint)), indexes.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+  glGenBuffers(1, &vertexBuffer->vboID);
+  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
+  glBufferData(GL_ARRAY_BUFFER, TPGLsizei(verts.size()*sizeof(PointSprite_lt)), verts.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  tpGenVertexArrays(1, &vertexBuffer->vaoID);
+  tpBindVertexArray(vertexBuffer->vaoID);
+  vertexBuffer->bindVBO();
   tpBindVertexArray(0);
+#else
+  vertexBuffer->vertexCount = GLuint(indexes.size());
+  std::vector<PointSprite_lt> indexedVerts;
+  indexedVerts.reserve(indexes.size());
+  for(auto index : indexes)
+    indexedVerts.push_back(verts.at(size_t(index)));
+
+  glGenBuffers(1, &vertexBuffer->vboID);
+  glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer->vboID);
+  glBufferData(GL_ARRAY_BUFFER, TPGLsizei(indexedVerts.size()*sizeof(PointSprite_lt)), indexedVerts.data(), GL_STATIC_DRAW);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+#endif
 
   return vertexBuffer;
 }
 
 //##################################################################################################
-void PointSpriteShader::deleteVertexBuffer(PointSpriteShader::VertexBuffer* vertexBuffer)const
+void PointSpriteShader::deleteVertexBuffer(PointSpriteShader::VertexBuffer* vertexBuffer) const
 {
   delete vertexBuffer;
 }
@@ -345,11 +320,12 @@ void PointSpriteShader::drawPointSprites(VertexBuffer* vertexBuffer)
 //##################################################################################################
 void PointSpriteShader::drawPointSpritesPicking(VertexBuffer* vertexBuffer, uint32_t pickingID)
 {
-#ifdef TDP_IOS
+#if !defined(TP_GLSL_PICKING_SUPPORTED) || defined(TP_EMSCRIPTEN)
+  TP_UNUSED(vertexBuffer);
+  TP_UNUSED(pickingID);
+#elif defined(TP_IOS)
   glUniform1i(d->pickingIDLoc, GLint(pickingID));
   d->draw(vertexBuffer);
-#elif defined(TDP_EMSCRIPTEN)
-
 #else
   glUniform1ui(d->pickingIDLoc, pickingID);
   d->draw(vertexBuffer);

@@ -1,8 +1,9 @@
 #ifndef tp_maps_LinesLayer_h
 #define tp_maps_LinesLayer_h
 
-#include "tp_maps/Layer.h"
-#include "tp_maps/shaders/MaterialShader.h"
+#include "tp_maps/layers/Geometry3DLayer.h"
+
+#include "tp_math_utils/Geometry3D.h"
 
 #include "glm/glm.hpp"
 
@@ -12,7 +13,7 @@ class LinesLayer;
 class Texture;
 
 //##################################################################################################
-struct Lines
+struct TP_MAPS_SHARED_EXPORT Lines
 {
   std::vector<glm::vec3> lines;
   glm::vec4 color{1.0f, 0.0f, 0.0f, 1.0f};
@@ -27,21 +28,35 @@ public:
   LinesLayer();
 
   //################################################################################################
-  ~LinesLayer()override;
+  ~LinesLayer() override;
 
   //################################################################################################
-  const std::vector<Lines>& lines()const;
+  const std::vector<Lines>& lines() const;
 
   //################################################################################################
   void setLines(const std::vector<Lines>& lines);
 
   //################################################################################################
-  float lineWidth()const;
+  void updateLines(const std::function<void(std::vector<Lines>&)>& closure);
+
+  //################################################################################################
+  //! Render a wire frame of the geometry.
+  void setLinesFromGeometry(const std::vector<tp_math_utils::Geometry3D>& geometry);
+
+  //################################################################################################
+  //! Render the normals, tangents, and bitangents of the geometry.
+  void setLinesFromGeometryNormals(const std::vector<tp_math_utils::Geometry3D>& geometry, float scale);
+
+  //################################################################################################
+  float lineWidth() const;
 
   //################################################################################################
   void setLineWidth(float lineWidth);
 
 protected:
+  //################################################################################################
+  virtual glm::mat4 calculateMatrix() const;
+
   //################################################################################################
   void render(RenderInfo& renderInfo) override;
 

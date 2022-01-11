@@ -8,6 +8,9 @@ namespace tp_maps
 //##################################################################################################
 struct PreparedString::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::PreparedString::Private");
+  TP_NONCOPYABLE(Private);
+
   FontRenderer* fontRenderer;
   std::u16string text;
   FontGeometry fontGeometry;
@@ -17,9 +20,9 @@ struct PreparedString::Private
   bool regenerateBuffers{true};  
 
   //################################################################################################
-  Private(FontRenderer* fontRenderer_, const std::u16string& text_, const PreparedStringConfig& config_):
+  Private(FontRenderer* fontRenderer_, std::u16string text_, const PreparedStringConfig& config_):
     fontRenderer(fontRenderer_),
-    text(text_),
+    text(std::move(text_)),
     config(config_)
   {
 
@@ -65,21 +68,21 @@ const FontGeometry& PreparedString::fontGeometry() const
 }
 
 //##################################################################################################
+const PreparedStringConfig& PreparedString::config() const
+{
+  return d->config;
+}
+
+//##################################################################################################
 void PreparedString::invalidateBuffers()
 {
-
+  d->regenerateBuffers = true;
 }
 
 //##################################################################################################
 void PreparedString::regenerateBuffers()
 {
   d->regenerateBuffers = true;
-}
-
-//##################################################################################################
-const PreparedStringConfig& PreparedString::config() const
-{
-  return d->config;
 }
 
 }

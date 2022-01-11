@@ -8,15 +8,19 @@
 #include "tp_utils/DebugUtils.h"
 
 #include <unordered_map>
+#include <cstring>
 
 namespace tp_maps
 {
 //##################################################################################################
 struct FontRenderer::Private
 {
+  TP_REF_COUNT_OBJECTS("tp_maps::FontRenderer::Private");
+  TP_NONCOPYABLE(Private);
+
   FontRenderer* q;
   Map* map;
-  Font* font;
+  std::shared_ptr<Font> font;
 
   std::vector<PreparedString*> preparedStrings;
   std::unordered_set<char16_t> requiredCharacters;
@@ -31,13 +35,13 @@ struct FontRenderer::Private
   bool regenerate{false};
 
   //################################################################################################
-  Private(FontRenderer* q_, Map* map_, Font* font_):
+  Private(FontRenderer* q_, Map* map_, std::shared_ptr<Font> font_):
     q(q_),
     map(map_),
-    font(font_),
+    font(std::move(font_)),
     texture(map)
   {
-    //texture.setMagFilterOption(GL_NEAREST);
+
   }
 
   //################################################################################################
@@ -55,7 +59,7 @@ struct FontRenderer::Private
       map->makeCurrent();
       map->deleteTexture(textureID);
       textureID = 0;
-      bindTexture = false;
+      bindTexture = true;
     }
   }
 
@@ -70,7 +74,7 @@ struct FontRenderer::Private
 };
 
 //##################################################################################################
-FontRenderer::FontRenderer(Map* map, Font* font):
+FontRenderer::FontRenderer(Map* map, const std::shared_ptr<Font>& font):
   d(new Private(this, map, font))
 {
   d->map->addFontRenderer(this);
@@ -90,7 +94,7 @@ Map* FontRenderer::map() const
 }
 
 //##################################################################################################
-Font* FontRenderer::font() const
+std::shared_ptr<Font> FontRenderer::font() const
 {
   return d->font;
 }
@@ -106,6 +110,8 @@ void FontRenderer::squeeze()
 void FontRenderer::invalidateBuffers()
 {
   d->textureID = 0;
+  d->bindTexture = true;
+
   for(auto preparedString : preparedStrings())
     preparedString->invalidateBuffers();
 }
@@ -128,9 +134,6 @@ GLuint FontRenderer::textureID()
 //##################################################################################################
 void FontRenderer::prepareFontGeometry(const PreparedString& preparedString, FontGeometry& fontGeometry)
 {
-  tp_utils::ElapsedTimer t;
-  t.start();
-
   d->generate();
 
   float lineSpacing=d->font->lineHeight();
@@ -141,6 +144,11 @@ void FontRenderer::prepareFontGeometry(const PreparedString& preparedString, Fon
 
   fontGeometry.totalWidth   = 0.0f;
   fontGeometry.totalHeight  = lineSpacing;
+
+  fontGeometry.top    = 0.0f;
+  fontGeometry.bottom = 0.0f;
+  fontGeometry.left   = 0.0f;
+  fontGeometry.right  = 0.0f;
 
   const auto& text = preparedString.text();
 
@@ -195,12 +203,29 @@ void FontRenderer::prepareFontGeometry(const PreparedString& preparedString, Fon
   glm::vec2 calculatedOffset{fontGeometry.totalWidth/2.0f, fontGeometry.totalHeight/2.0f};
   calculatedOffset *= glm::vec2(-1.0f, -1.0f) + preparedString.config().relativeOffset;
   calculatedOffset += preparedString.config().pixelOffset;
+  calculatedOffset = glm::floor(calculatedOffset);
 
   for(auto& glyph : fontGeometry.glyphs)
   {
     for(auto& vert : glyph.vertices)
+    {
       vert += calculatedOffset;
+
+      if(vert.y>fontGeometry.top)
+        fontGeometry.top = vert.y;
+
+      if(vert.y<fontGeometry.bottom)
+        fontGeometry.bottom = vert.y;
+
+      if(vert.x<fontGeometry.left)
+        fontGeometry.left = vert.x;
+
+      if(vert.x>fontGeometry.right)
+        fontGeometry.right = vert.x;
+    }
   }
+
+  fontGeometry.totalHeight = tpMax(fontGeometry.totalHeight, fontGeometry.top - fontGeometry.bottom);
 }
 
 //##################################################################################################
@@ -227,15 +252,16 @@ void FontRenderer::generate()
 
     float kerningWidth{0.0f};
 
-    std::vector<Pixel> data;
+    std::vector<TPPixel> data;
 
-    char16_t character;
+    char16_t character{};
 
     bool valid{false};
   };
 
   //-- Generate the glyphs -------------------------------------------------------------------------
   std::vector<GlyphDetails_lt*> glyphs;
+  glyphs.reserve(requiredCharacters().size());
   for(const auto character : requiredCharacters())
   {
     auto current = new GlyphDetails_lt();
@@ -245,22 +271,20 @@ void FontRenderer::generate()
     {
       modifyGlyph(glyph, [&](const Glyph& glyph)
       {
-        size_t size = size_t(glyph.w * glyph.h);
+        auto size = size_t(glyph.w) * size_t(glyph.h);
+        current->width  = size_t(glyph.w);
+        current->height = size_t(glyph.h);
+
+        current->leftBearing   = glyph.leftBearing  ;
+        current->rightBearing  = glyph.rightBearing ;
+        current->topBearing    = glyph.topBearing   ;
+        current->bottomBearing = glyph.bottomBearing;
+
+        current->kerningWidth  = glyph.kerningWidth ;
+
+        current->data.resize(size);
         if(size>0)
-        {
-          current->width  = size_t(glyph.w);
-          current->height = size_t(glyph.h);
-
-          current->leftBearing   = glyph.leftBearing  ;
-          current->rightBearing  = glyph.rightBearing ;
-          current->topBearing    = glyph.topBearing   ;
-          current->bottomBearing = glyph.bottomBearing;
-
-          current->kerningWidth  = glyph.kerningWidth ;
-
-          current->data.resize(size);
-          memcpy(current->data.data(), glyph.data, size*sizeof(Pixel));
-        }
+          memcpy(current->data.data(), glyph.data, size*sizeof(TPPixel));
       });
     });
 
@@ -277,7 +301,7 @@ void FontRenderer::generate()
   {
     size_t w=padding1;
     size_t h=padding1;
-    size_t lastHeight=0;
+    size_t rowHeight=0;
 
     overflow = false;
     for(const auto glyph : glyphs)
@@ -292,7 +316,8 @@ void FontRenderer::generate()
 
       if(w>textureSize)
       {
-        h+=pad1(lastHeight);
+        h+=pad1(rowHeight);
+        rowHeight=0;
 
         if((h+pad1(glyph->height))>textureSize)
         {
@@ -303,7 +328,8 @@ void FontRenderer::generate()
         w=pad1(glyph->width);
       }
 
-      lastHeight = glyph->height;
+      if(glyph->height>rowHeight)
+        rowHeight = glyph->height;
     }
   }
 
@@ -311,25 +337,19 @@ void FontRenderer::generate()
   if(overflow)
     return;
 
-  std::vector<Pixel> pixels;
-  {
-    Pixel p;
-    p.r = 0;
-    p.g = 0;
-    p.b = 0;
-    p.a = 0;
-    pixels.resize(textureSize*textureSize, p);
-  }
-  TextureData textureData;
-  textureData.w = int(textureSize);
-  textureData.h = int(textureSize);
-  textureData.data = pixels.data();
+  TPPixel fillColor;
+  fillColor.r = 0;
+  fillColor.g = 0;
+  fillColor.b = 0;
+  fillColor.a = 0;
+
+  tp_image_utils::ColorMap textureData(textureSize, textureSize, nullptr, fillColor);
 
   //-- Draw glyphs to the texture ------------------------------------------------------------------
   {
     size_t w=padding1;
     size_t h=padding1;
-    size_t lastHeight=0;
+    size_t rowHeight=0;
 
     for(const auto glyph : glyphs)
     {
@@ -339,23 +359,25 @@ void FontRenderer::generate()
 
       if(w>textureSize)
       {
-        h+=pad1(lastHeight);
+        h+=pad1(rowHeight);
+        rowHeight=0;
 
         x = padding1;
         w=pad1(glyph->width);
       }
 
-      lastHeight = glyph->height;
+      if(glyph->height>rowHeight)
+        rowHeight = glyph->height;
 
       {
-      size_t y = h;
-      size_t bytes = glyph->width*sizeof(Pixel);
-      for(size_t sy=0; sy<glyph->height; sy++, y++)
-      {
-        const auto src = glyph->data.data() + (sy*glyph->width);
-        auto dst = textureData.data + ((y*size_t(textureData.w)) + x);
-        memcpy(dst, src, bytes);
-      }
+        size_t y = h;
+        size_t bytes = glyph->width*sizeof(TPPixel);
+        for(size_t sy=0; sy<glyph->height; sy++, y++)
+        {
+          const auto src = glyph->data.data() + (sy*glyph->width);
+          auto dst = textureData.data() + ((y*size_t(textureData.width())) + x);
+          memcpy(dst, src, bytes);
+        }
       }
 
       {
@@ -371,17 +393,17 @@ void FontRenderer::generate()
         glyphGeometry.textureCoords[2] = {fr, fb};
         glyphGeometry.textureCoords[3] = {fx, fb};
 
-        glyphGeometry.vertices[0] = {               0.0f,                 0.0f+glyph->bottomBearing};
-        glyphGeometry.vertices[1] = {float(glyph->width),                 0.0f+glyph->bottomBearing};
-        glyphGeometry.vertices[2] = {float(glyph->width), float(glyph->height)+glyph->bottomBearing};
-        glyphGeometry.vertices[3] = {               0.0f, float(glyph->height)+glyph->bottomBearing};
+        glyphGeometry.vertices[0] = {               0.0f+glyph->leftBearing,                 0.0f+glyph->bottomBearing}; // Bottom left
+        glyphGeometry.vertices[1] = {float(glyph->width)+glyph->leftBearing,                 0.0f+glyph->bottomBearing}; // Bottom right
+        glyphGeometry.vertices[2] = {float(glyph->width)+glyph->leftBearing, float(glyph->height)+glyph->bottomBearing}; // Top right
+        glyphGeometry.vertices[3] = {               0.0f+glyph->leftBearing, float(glyph->height)+glyph->bottomBearing}; // Top left
 
-        glyphGeometry.leftBearing   = 0.0f;
-        glyphGeometry.rightBearing  = 0.0f;
-        glyphGeometry.topBearing    = 0.0f;
-        glyphGeometry.bottomBearing = 0.0f;
+        glyphGeometry.leftBearing   = glyph->leftBearing  ;
+        glyphGeometry.rightBearing  = glyph->rightBearing ;
+        glyphGeometry.topBearing    = glyph->topBearing   ;
+        glyphGeometry.bottomBearing = glyph->bottomBearing;
 
-        glyphGeometry.kerningWidth = float(glyph->width);
+        glyphGeometry.kerningWidth = glyph->kerningWidth;
       }
     }
   }
@@ -399,10 +421,14 @@ void FontRenderer::modifyGlyph(const Glyph& glyph, const std::function<void(cons
 }
 
 //##################################################################################################
-void FontRenderer::setTexture(const TextureData& texture)
+void FontRenderer::setTexture(const tp_image_utils::ColorMap& texture)
 {
   d->texture.setImage(texture);
   d->freeTexture();
+
+  for(auto preparedString : preparedStrings())
+    preparedString->regenerateBuffers();
+
   d->bindTexture = true;
 }
 
